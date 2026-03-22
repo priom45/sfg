@@ -1,0 +1,183 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body {
+    overflow-x: hidden;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply font-sans text-brand-text bg-brand-bg;
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 1.5;
+    letter-spacing: -0.01em;
+    background-image:
+      radial-gradient(circle at top left, rgba(216, 178, 78, 0.12), transparent 30%),
+      radial-gradient(circle at top right, rgba(93, 122, 66, 0.18), transparent 28%),
+      linear-gradient(180deg, #182014 0%, #12180F 40%, #0F140D 100%);
+    background-attachment: fixed;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+  }
+
+  p, span, a, li, label, td, th {
+    font-weight: 500;
+  }
+
+  strong, b {
+    font-weight: 700;
+  }
+
+  ::selection {
+    background: rgba(216, 178, 78, 0.24);
+    color: #F6F3E8;
+  }
+}
+
+@layer components {
+  .customer-main {
+    @apply pb-16;
+  }
+
+  .customer-bottom-nav {
+    @apply fixed bottom-0 left-0 right-0 z-50 bg-brand-bg border-t border-brand-border;
+  }
+
+  .customer-floating-cart {
+    @apply fixed left-4 right-4 z-40 animate-slide-up max-w-lg mx-auto;
+    bottom: 76px;
+  }
+
+  .cart-submit-bar {
+    @apply fixed left-0 right-0 z-40 bg-brand-bg/95 backdrop-blur-sm border-t border-brand-border px-4 py-3;
+    bottom: 64px;
+  }
+
+  .btn-primary {
+    @apply bg-brand-gold text-brand-bg px-6 py-3.5 rounded-xl
+           hover:brightness-110 active:scale-[0.97] transition-all duration-200
+           disabled:opacity-50 disabled:cursor-not-allowed;
+    font-weight: 700;
+    font-size: 15px;
+  }
+
+  .btn-secondary {
+    @apply bg-brand-surface text-brand-text px-6 py-3.5 rounded-xl
+           border border-brand-border hover:border-brand-gold/30 hover:text-brand-gold
+           active:scale-[0.97] transition-all duration-200;
+    font-weight: 600;
+    font-size: 15px;
+  }
+
+  .btn-outline {
+    @apply border border-brand-gold text-brand-gold px-6 py-3.5 rounded-xl
+           hover:bg-brand-gold hover:text-brand-bg active:scale-[0.97] transition-all duration-200;
+    font-weight: 700;
+    font-size: 15px;
+  }
+
+  .card {
+    @apply bg-brand-surface rounded-xl border border-brand-border overflow-hidden
+           hover:border-brand-gold/20 transition-all duration-300;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-3.5 border border-brand-border rounded-xl text-brand-text
+           focus:outline-none focus:ring-2 focus:ring-brand-gold/15 focus:border-brand-gold/50
+           transition-all duration-200 placeholder:text-brand-text-dim
+           bg-brand-surface hover:border-brand-border-strong;
+    font-size: 15px;
+    font-weight: 500;
+  }
+
+  .badge-veg {
+    @apply inline-flex items-center gap-1 px-2.5 py-1
+           bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-md;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .badge-nonveg {
+    @apply inline-flex items-center gap-1 px-2.5 py-1
+           bg-red-500/10 text-red-400 border border-red-500/20 rounded-md;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .section-padding {
+    @apply px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto;
+  }
+
+  .glass-panel {
+    @apply bg-brand-surface/80 backdrop-blur-xl border border-brand-border;
+  }
+
+  .section-label {
+    @apply text-brand-gold-soft uppercase;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+  }
+
+  .section-title {
+    @apply text-brand-text mt-1;
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (orientation: landscape) {
+  .customer-main {
+    padding-bottom: 0;
+  }
+
+  .customer-bottom-nav {
+    display: none;
+  }
+
+  .customer-floating-cart {
+    bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .cart-submit-bar {
+    bottom: 0;
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #12180F;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4B5C3C;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #61794C;
+}
