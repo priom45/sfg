@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronRight, ChevronLeft, Truck, Clock, Sparkles, Flame } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Clock, Sparkles, Flame } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { getOfferBadgeLabel, getOfferRewardLabel, getOfferRuleSummary } from '../lib/offers';
@@ -157,7 +157,6 @@ export default function Home() {
       >
         <div className="flex items-center gap-3 text-[12px] font-semibold text-brand-text-dim">
           {[
-            { icon: Truck, text: 'Free delivery over \u20B9299' },
             { icon: Clock, text: '10-min prep' },
             { icon: Sparkles, text: 'Fresh & Handcrafted' },
           ].map((item, i) => (

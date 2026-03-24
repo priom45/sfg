@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Check, X, ChevronRight, Truck, Store, Filter, Clock } from 'lucide-react';
+import { Check, X, ChevronRight, Truck, Store, Filter, Clock, Download } from 'lucide-react';
 import { markOrderReady } from '../../lib/markOrderReady';
+import { downloadOrderReceiptPdf } from '../../lib/orderReceiptPdf';
 import { supabase } from '../../lib/supabase';
 import { getCompletedOrderLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingOnlinePayment, isDineInOrder } from '../../lib/orderLabels';
 import { useToast } from '../../components/Toast';
@@ -8,6 +9,12 @@ import type { Order, OrderStatus, OrderType } from '../../types';
 
 const pickupFlow: OrderStatus[] = ['confirmed', 'preparing', 'packed', 'delivered'];
 const deliveryFlow: OrderStatus[] = ['confirmed', 'preparing', 'packed', 'out_for_delivery', 'delivered'];
+type ReceiptItemRow = {
+  item_name: string;
+  quantity: number;
+  unit_price: number;
+  customizations: unknown;
+};
 
 const PREP_TIME_OPTIONS = [5, 10, 15, 20, 25, 30, 45, 60];
 
@@ -117,6 +124,7 @@ export default function AdminOrders() {
   const [statusFilter, setStatusFilter] = useState<string>('active');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const { showToast } = useToast();
 
   const loadOrders = useCallback(async () => {
@@ -201,6 +209,31 @@ export default function AdminOrders() {
     setConfirmingId(null);
     showToast('Order cancelled');
     await loadOrders();
+  }
+
+  async function downloadReceipt(order: Order) {
+    setDownloadingId(order.id);
+
+    try {
+      const { data, error } = await supabase
+        .from('order_items')
+        .select('item_name, quantity, unit_price, customizations')
+        .eq('order_id', order.id);
+
+      if (error) {
+        console.error('Failed to load receipt items', error);
+        showToast(error.message || 'Failed to load receipt items', 'error');
+        return;
+      }
+
+      await downloadOrderReceiptPdf(order, (data || []) as ReceiptItemRow[]);
+      showToast('Receipt downloaded');
+    } catch (error) {
+      console.error('Failed to download receipt PDF', error);
+      showToast('Failed to download receipt PDF', 'error');
+    } finally {
+      setDownloadingId(null);
+    }
   }
 
   function getTimeAgo(dateStr: string) {
@@ -331,7 +364,15 @@ export default function AdminOrders() {
                   </div>
                   <div className="text-right flex-shrink-0">
                     <p className="font-bold text-white">₹{order.total}</p>
-                    <p className="text-xs text-brand-text-dim">{getTimeAgo(order.placed_at)}</p>
+                    <p className="text-xs text-brand-text-dim mb-2">{getTimeAgo(order.placed_at)}</p>
+                    <button
+                      onClick={() => downloadReceipt(order)}
+                      disabled={downloadingId === order.id}
+                      className="inline-flex items-center gap-1 rounded-lg border border-brand-border px-3 py-1.5 text-xs font-medium text-brand-text-muted transition-colors hover:border-brand-gold/40 hover:text-brand-gold disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <Download size={13} />
+                      {downloadingId === order.id ? 'Preparing PDF...' : 'Download PDF'}
+                    </button>
                   </div>
                 </div>
 
