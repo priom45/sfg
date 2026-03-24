@@ -49,24 +49,32 @@ class CounterOrderHttpError extends Error {
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
-async function ensureFreshCounterOrderSession() {
+async function refreshCounterOrderSession(errorMessage = 'Please sign in again to place your order.') {
+  const { data: refreshedData, error: refreshError } = await customerSupabase.auth.refreshSession();
+  if (refreshError || !refreshedData.session) {
+    throw new Error(errorMessage);
+  }
+
+  return refreshedData.session;
+}
+
+async function ensureFreshCounterOrderSession(options?: { forceRefresh?: boolean; errorMessage?: string }) {
+  const forceRefresh = options?.forceRefresh ?? false;
+  const errorMessage = options?.errorMessage ?? 'Please sign in again to place your order.';
+
+  if (forceRefresh) {
+    return refreshCounterOrderSession(errorMessage);
+  }
+
   const { data: sessionData } = await customerSupabase.auth.getSession();
 
   if (!sessionData.session) {
-    const { data: refreshedData, error: refreshError } = await customerSupabase.auth.refreshSession();
-    if (refreshError || !refreshedData.session) {
-      throw new Error('Please sign in again to place your order.');
-    }
-    return refreshedData.session;
+    return refreshCounterOrderSession(errorMessage);
   }
 
   const expiresAtMs = sessionData.session.expires_at ? sessionData.session.expires_at * 1000 : 0;
   if (expiresAtMs && expiresAtMs - Date.now() < 60_000) {
-    const { data: refreshedData, error: refreshError } = await customerSupabase.auth.refreshSession();
-    if (refreshError || !refreshedData.session) {
-      throw new Error('Please sign in again to place your order.');
-    }
-    return refreshedData.session;
+    return refreshCounterOrderSession(errorMessage);
   }
 
   return sessionData.session;
@@ -137,7 +145,7 @@ export async function createCounterOrder(payload: CreateCounterOrderPayload) {
     data = await invokeCounterOrderFunction(payload, session.access_token);
   } catch (error) {
     if (error instanceof CounterOrderHttpError && error.status === 401) {
-      session = await ensureFreshCounterOrderSession();
+      session = await ensureFreshCounterOrderSession({ forceRefresh: true });
       try {
         data = await invokeCounterOrderFunction(payload, session.access_token);
       } catch (retryError) {

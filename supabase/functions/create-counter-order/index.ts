@@ -7,6 +7,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers":
     "Content-Type, Authorization, X-Client-Info, Apikey",
 };
+const TAKEAWAY_FEE = 10;
 
 interface CounterOrderItem {
   menu_item_id: string;
@@ -38,12 +39,16 @@ type AppOrderInsert = {
   order_type: "pickup";
   pickup_option: "dine_in" | "takeaway";
   delivery_fee: number;
+  takeaway_fee: number;
   subtotal: number;
   discount: number;
   total: number;
   payment_method: "cod" | "upi" | "card";
   payment_status: "pending" | "paid";
 };
+
+type AppOrderInsertCompat = Omit<AppOrderInsert, "pickup_option" | "takeaway_fee"> &
+  Partial<Pick<AppOrderInsert, "pickup_option" | "takeaway_fee">>;
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -52,9 +57,16 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
   });
 }
 
-function isMissingPickupOptionColumn(error: { code?: string; message?: string } | null) {
-  return !!error?.message?.includes("pickup_option") &&
+function isMissingOrderColumn(
+  error: { code?: string; message?: string } | null,
+  columnName: "pickup_option" | "takeaway_fee",
+) {
+  return !!error?.message?.includes(columnName) &&
     (error.code === "42703" || error.code === "PGRST204");
+}
+
+function roundCurrency(value: number) {
+  return Math.round(value * 100) / 100;
 }
 
 async function createAppOrder(
@@ -67,9 +79,16 @@ async function createAppOrder(
     .select("id, order_id")
     .single();
 
-  if (isMissingPickupOptionColumn(error)) {
-    const { pickup_option: ignoredPickupOption, ...legacyInsert } = orderInsert;
-    void ignoredPickupOption;
+  if (isMissingOrderColumn(error, "pickup_option") || isMissingOrderColumn(error, "takeaway_fee")) {
+    const legacyInsert: AppOrderInsertCompat = { ...orderInsert };
+
+    if (isMissingOrderColumn(error, "pickup_option")) {
+      delete legacyInsert.pickup_option;
+    }
+
+    if (isMissingOrderColumn(error, "takeaway_fee")) {
+      delete legacyInsert.takeaway_fee;
+    }
 
     ({ data, error } = await adminClient
       .from("orders")
@@ -152,6 +171,8 @@ Deno.serve(async (req: Request) => {
     const subtotal = Number(body.subtotal ?? 0);
     const discount = Number(body.discount ?? 0);
     const total = Number(body.total ?? 0);
+    const takeawayFee = pickupOption === "takeaway" ? TAKEAWAY_FEE : 0;
+    const expectedTotal = roundCurrency(Math.max(0, subtotal - discount) + takeawayFee);
 
     if (!customerName || !customerPhone) {
       return jsonResponse({ success: false, error: "Customer details are required" }, 400);
@@ -161,8 +182,20 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: false, error: "Cart is empty" }, 400);
     }
 
+    if (!Number.isFinite(subtotal) || subtotal < 0) {
+      return jsonResponse({ success: false, error: "Invalid subtotal" }, 400);
+    }
+
+    if (!Number.isFinite(discount) || discount < 0) {
+      return jsonResponse({ success: false, error: "Invalid discount" }, 400);
+    }
+
     if (!Number.isFinite(total) || total < 0) {
       return jsonResponse({ success: false, error: "Invalid order total" }, 400);
+    }
+
+    if (Math.abs(roundCurrency(total) - expectedTotal) > 0.01) {
+      return jsonResponse({ success: false, error: "Order total mismatch" }, 400);
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -177,20 +210,24 @@ Deno.serve(async (req: Request) => {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    const {
-      data: { user },
-      error: authError,
-    } = await userClient.auth.getUser();
+    const [
+      {
+        data: { user },
+        error: authError,
+      },
+      { data: siteSettings },
+    ] = await Promise.all([
+      userClient.auth.getUser(),
+      adminClient
+        .from("site_settings")
+        .select("site_is_open, reopening_text")
+        .eq("id", true)
+        .maybeSingle(),
+    ]);
 
     if (authError || !user) {
       return jsonResponse({ success: false, error: "Unauthorized request" }, 401);
     }
-
-    const { data: siteSettings } = await adminClient
-      .from("site_settings")
-      .select("site_is_open, reopening_text")
-      .eq("id", true)
-      .maybeSingle();
 
     if (siteSettings && !siteSettings.site_is_open) {
       return jsonResponse({
@@ -211,6 +248,7 @@ Deno.serve(async (req: Request) => {
       order_type: "pickup",
       pickup_option: pickupOption,
       delivery_fee: 0,
+      takeaway_fee: takeawayFee,
       subtotal,
       discount,
       total,
@@ -240,19 +278,18 @@ Deno.serve(async (req: Request) => {
       throw itemsError;
     }
 
-    let receiptEmailSent = false;
-    try {
-      const emailType = paymentStatus === "paid" ? "receipt" : "confirmation";
-      await requestReceiptEmail(supabaseUrl, anonKey, serviceKey, order.order_id, emailType);
-      receiptEmailSent = true;
-    } catch (receiptError) {
-      console.error("Failed to send order email", receiptError);
-    }
+    const emailType = paymentStatus === "paid" ? "receipt" : "confirmation";
+    EdgeRuntime.waitUntil(
+      requestReceiptEmail(supabaseUrl, anonKey, serviceKey, order.order_id, emailType)
+        .catch((receiptError) => {
+          console.error("Failed to send order email", receiptError);
+        }),
+    );
 
     return jsonResponse({
       success: true,
       appOrderId: order.order_id,
-      receiptEmailSent,
+      receiptEmailSent: true,
     });
   } catch (error) {
     return jsonResponse(

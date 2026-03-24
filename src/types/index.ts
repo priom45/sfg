@@ -123,6 +123,7 @@ export interface Order {
   order_type: OrderType;
   pickup_option: PickupOption;
   delivery_fee: number;
+  takeaway_fee: number;
   subtotal: number;
   discount: number;
   total: number;

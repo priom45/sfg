@@ -4,12 +4,15 @@ import { CheckCircle, Clock, Copy, RotateCcw, Store, Truck, ChefHat, Users, Bell
 import { motion, AnimatePresence } from 'motion/react';
 import { clearCheckoutSuccessOrder } from '../lib/checkoutSuccess';
 import { supabase } from '../lib/supabase';
-import { getPaymentMethodLabel, getReadyOrderLabel, getServiceModeLabel } from '../lib/orderLabels';
+import { getPaymentMethodLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment } from '../lib/orderLabels';
+import { createExistingRazorpayOrder, loadRazorpayScript, verifyRazorpayPayment } from '../lib/razorpay';
 import type { Order, MenuItem } from '../types';
 import { useToast } from '../components/Toast';
 import { playOrderSound, playOrderCompleteSound, playPickupReadyAlert } from '../lib/sounds';
 import { useAuth } from '../contexts/AuthContext';
 import { staggerContainer, staggerChild } from '../lib/animations';
+
+const SESSION_KEYWORDS = ['session expired', 'sign in again', 'please sign in', 'authentication failed'];
 
 export default function OrderSuccessPage() {
   const { orderId } = useParams<{ orderId: string }>();
@@ -17,6 +20,7 @@ export default function OrderSuccessPage() {
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [specials, setSpecials] = useState<MenuItem[]>([]);
+  const [payingOnline, setPayingOnline] = useState(false);
   const { showToast } = useToast();
   const prevStatusRef = useRef<string | null>(null);
   const pickupAlertPlayedRef = useRef(false);
@@ -131,10 +135,114 @@ export default function OrderSuccessPage() {
     };
   }, [order, showToast]);
 
+  useEffect(() => {
+    if (!order || !isAwaitingCounterPayment(order)) return;
+    void loadRazorpayScript().catch((error) => {
+      console.error('Failed to preload Razorpay checkout', error);
+    });
+  }, [order]);
+
   function copyOrderId() {
     if (order) {
       navigator.clipboard.writeText(order.order_id);
       showToast('Order ID copied!');
+    }
+  }
+
+  async function handlePayOnlineNow() {
+    if (!order || payingOnline) return;
+
+    setPayingOnline(true);
+
+    try {
+      const razorpayScriptPromise = loadRazorpayScript();
+      const razorpayOrder = await createExistingRazorpayOrder(order.order_id);
+
+      await razorpayScriptPromise;
+
+      const RazorpayCheckout = window.Razorpay;
+      if (!RazorpayCheckout) {
+        throw new Error('Razorpay checkout is unavailable');
+      }
+
+      const paymentMethod = await new Promise<'upi' | 'card' | undefined>((resolve, reject) => {
+        let paymentFinalized = false;
+
+        const checkout = new RazorpayCheckout({
+          key: razorpayOrder.keyId,
+          amount: razorpayOrder.amount,
+          currency: razorpayOrder.currency,
+          name: 'The Supreme Waffle',
+          description: `${serviceModeLabel} Order`,
+          order_id: razorpayOrder.razorpayOrderId,
+          prefill: {
+            name: razorpayOrder.customerName,
+            email: razorpayOrder.customerEmail,
+            contact: razorpayOrder.customerPhone,
+          },
+          notes: {
+            app_order_id: razorpayOrder.appOrderId,
+          },
+          theme: {
+            color: '#D8B24E',
+          },
+          retry: {
+            enabled: true,
+            max_count: 2,
+          },
+          modal: {
+            confirm_close: true,
+            ondismiss: () => {
+              if (paymentFinalized) return;
+              reject(new Error('Payment cancelled'));
+            },
+          },
+          handler: (response) => {
+            paymentFinalized = true;
+
+            void (async () => {
+              try {
+                const verification = await verifyRazorpayPayment({
+                  appOrderId: razorpayOrder.appOrderId,
+                  razorpayOrderId: response.razorpay_order_id,
+                  razorpayPaymentId: response.razorpay_payment_id,
+                  razorpaySignature: response.razorpay_signature,
+                });
+                resolve(verification.paymentMethod);
+              } catch (verificationError) {
+                reject(verificationError instanceof Error ? verificationError : new Error('Payment verification failed'));
+              }
+            })();
+          },
+        });
+
+        checkout.on('payment.failed', (failure) => {
+          if (paymentFinalized) return;
+          paymentFinalized = true;
+          reject(new Error(failure.error?.description || 'Payment failed'));
+        });
+
+        checkout.open();
+      });
+
+      setOrder((currentOrder) => currentOrder ? {
+        ...currentOrder,
+        payment_status: 'paid',
+        payment_provider: 'razorpay',
+        payment_method: paymentMethod === 'upi' ? 'upi' : 'card',
+      } : currentOrder);
+      showToast('Payment completed successfully');
+    } catch (paymentError) {
+      console.error('Failed to complete online payment', paymentError);
+      const message = paymentError instanceof Error ? paymentError.message : 'Failed to complete online payment';
+      const lowerMessage = message.toLowerCase();
+      const isSessionError = SESSION_KEYWORDS.some((keyword) => lowerMessage.includes(keyword));
+      if (isSessionError) {
+        navigate('/auth', { state: { from: `/order-success/${order.order_id}` }, replace: true });
+      }
+      showToast(message === 'Payment cancelled' ? 'Payment cancelled' : message, 'error');
+    } finally {
+      setPayingOnline(false);
     }
   }
 
@@ -164,6 +272,8 @@ export default function OrderSuccessPage() {
   const isCancelled = order.status === 'cancelled';
   const isPending = order.status === 'pending';
   const isPickup = order.order_type === 'pickup';
+  const isCounterPaymentPending = isAwaitingCounterPayment(order);
+  const isQueuePending = isPending && !isCounterPaymentPending;
   const isPreparing = order.status === 'preparing';
   const isPickupReady = isPickup && order.status === 'packed';
   const isDeliveryPacked = !isPickup && order.status === 'packed';
@@ -224,7 +334,24 @@ export default function OrderSuccessPage() {
           </motion.div>
         )}
 
-        {isPending && (
+        {isCounterPaymentPending && (
+          <motion.div key="payment-pending" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }}>
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+              className="w-20 h-20 bg-amber-500/10 border border-amber-500/20 rounded-full flex items-center justify-center mx-auto mb-6"
+            >
+              <Wallet size={40} className="text-amber-400" />
+            </motion.div>
+            <h1 className="text-2xl font-extrabold tracking-tight text-white mb-2">Awaiting Counter Payment</h1>
+            <p className="text-brand-text-muted mb-8">
+              Show your order ID at the counter and complete payment, or pay online now with Razorpay. Your order will join the kitchen queue after payment is confirmed.
+            </p>
+          </motion.div>
+        )}
+
+        {isQueuePending && (
           <motion.div key="pending" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }}>
             <motion.div
               initial={{ scale: 0.8, opacity: 0 }}
@@ -341,10 +468,17 @@ export default function OrderSuccessPage() {
             </button>
           </div>
 
-          {isPending && (
+          {isCounterPaymentPending && (
+            <div className="mt-4 flex items-center justify-center gap-2 bg-amber-500/10 rounded-2xl px-4 py-3 border border-amber-500/20">
+              <Wallet size={16} className="text-amber-400" />
+              <span className="text-[14px] font-bold text-amber-400">Payment pending at the counter.</span>
+            </div>
+          )}
+
+          {isQueuePending && (
             <div className="mt-4 flex items-center justify-center gap-2 bg-orange-500/10 rounded-2xl px-4 py-3 border border-orange-500/20">
               <Users size={16} className="text-orange-400" />
-              <span className="text-[14px] font-bold text-orange-400">Your order is placed successfully.</span>
+              <span className="text-[14px] font-bold text-orange-400">Your order is now in queue.</span>
             </div>
           )}
 
@@ -375,7 +509,15 @@ export default function OrderSuccessPage() {
             </div>
           )}
 
-          {isPending && (
+          {isCounterPaymentPending && (
+            <div className="mt-4 bg-amber-500/5 rounded-2xl px-4 py-3">
+              <p className="text-[14px] text-brand-text-muted font-semibold">
+                Tell the staff your order ID and complete payment at the counter, or use the online payment option below. Your order will move to the queue once payment is confirmed.
+              </p>
+            </div>
+          )}
+
+          {isQueuePending && (
             <div className="mt-4 bg-orange-500/5 rounded-2xl px-4 py-3">
               <p className="text-[14px] text-brand-text-muted font-semibold">
                 Please wait in queue. Your order will be prepared soon. Thanks for your patience.
@@ -399,8 +541,8 @@ export default function OrderSuccessPage() {
             </div>
           )}
 
-          {order.payment_method === 'cod' && order.payment_status !== 'paid' && !isDelivered && !isExpired && !isCancelled && (
-            <PaymentInstructionCard order={order} isPickup={isPickup} />
+          {(isCounterPaymentPending || (order.order_type === 'delivery' && order.payment_method === 'cod' && order.payment_status !== 'paid')) && !isDelivered && !isExpired && !isCancelled && (
+            <PaymentInstructionCard order={order} onPayOnline={isCounterPaymentPending ? handlePayOnlineNow : undefined} payingOnline={payingOnline} />
           )}
 
           <div className="mt-6 pt-4 border-t border-brand-border text-[14px] text-brand-text-muted">
@@ -626,7 +768,24 @@ function SpecialsSuggestions({ items, onViewMenu }: { items: MenuItem[]; onViewM
   );
 }
 
-function PaymentInstructionCard({ order, isPickup }: { order: Order; isPickup: boolean }) {
+function PaymentInstructionCard({
+  order,
+  onPayOnline,
+  payingOnline = false,
+}: {
+  order: Order;
+  onPayOnline?: () => void;
+  payingOnline?: boolean;
+}) {
+  const isPickup = order.order_type === 'pickup';
+  const instructionHeading = getPendingPaymentLabel(order);
+  const paymentLine = isPickup
+    ? 'Show this order ID at the counter to confirm your order'
+    : 'Pay the delivery partner when your order arrives';
+  const footerLine = isPickup
+    ? 'Your order will enter the queue after staff confirms payment'
+    : 'Please keep exact change ready';
+
   return (
     <div className="mt-4 rounded-2xl border-2 border-brand-gold/30 bg-brand-gold/[0.04] p-4">
       <div className="flex items-center gap-2 mb-3">
@@ -634,21 +793,40 @@ function PaymentInstructionCard({ order, isPickup }: { order: Order; isPickup: b
           <Wallet size={16} className="text-brand-gold" />
         </div>
         <div>
-          <h4 className="text-[13px] font-bold text-white">
-            {isPickup ? 'Pay at Counter' : 'Cash on Delivery'}
-          </h4>
-          <p className="text-[11px] text-brand-text-dim">
-            {isPickup ? 'Show this order ID and pay at the counter' : 'Pay the delivery partner when your order arrives'}
-          </p>
+          <h4 className="text-[17px] font-extrabold text-white tracking-tight">{instructionHeading}</h4>
+          <p className="text-[12px] font-semibold text-brand-text-muted">{paymentLine}</p>
         </div>
       </div>
       <div className="bg-brand-bg/60 rounded-xl px-4 py-3 flex items-center justify-between">
         <span className="text-[13px] text-brand-text-muted font-medium">Amount to Pay</span>
         <span className="text-2xl font-black text-brand-gold tabular-nums">{'\u20B9'}{order.total}</span>
       </div>
-      <p className="text-[11px] text-brand-text-dim mt-2.5 text-center">
-        {isPickup ? 'Cash or UPI accepted at the counter' : 'Please keep exact change ready'}
-      </p>
+      {isPickup && (
+        <div className="mt-3 text-center">
+          <p className="text-[20px] font-black tracking-tight text-white">
+            PAY CASH AT COUNTER
+          </p>
+          {onPayOnline && (
+            <p className="mt-2 text-[12px] font-black uppercase tracking-[0.35em] text-brand-text-dim">
+              OR
+            </p>
+          )}
+        </div>
+      )}
+      {onPayOnline && (
+        <button
+          onClick={onPayOnline}
+          disabled={payingOnline}
+          className="mt-3 w-full rounded-xl bg-brand-gold px-4 py-3.5 text-[14px] font-black text-brand-bg transition-colors hover:bg-brand-gold-soft disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {payingOnline ? 'Opening UPI Payment...' : 'Pay via UPI'}
+        </button>
+      )}
+      {!onPayOnline && (
+        <p className="text-[12px] font-semibold text-brand-text-dim mt-2.5 text-center">
+          {footerLine}
+        </p>
+      )}
     </div>
   );
 }

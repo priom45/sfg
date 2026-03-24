@@ -30,6 +30,7 @@ interface ReceiptOrder {
   subtotal: number;
   discount: number;
   delivery_fee: number;
+  takeaway_fee?: number | null;
   total: number;
   payment_method: "cod" | "upi" | "card";
   payment_status: string;
@@ -145,8 +146,11 @@ function receiptEmailCopy(order: ReceiptOrder, isConfirmation: boolean): Receipt
   };
 }
 
-function isMissingPickupOptionColumn(error: { code?: string; message?: string } | null) {
-  return !!error?.message?.includes("pickup_option") &&
+function isMissingOrderColumn(
+  error: { code?: string; message?: string } | null,
+  columnName: "pickup_option" | "takeaway_fee",
+) {
+  return !!error?.message?.includes(columnName) &&
     (error.code === "42703" || error.code === "PGRST204");
 }
 
@@ -173,14 +177,26 @@ async function fetchOrderWithPickupFallback(
 
   let { data, error } = await adminClient
     .from("orders")
-    .select(`${baseSelect}, pickup_option`)
+    .select(`${baseSelect}, pickup_option, takeaway_fee`)
     .eq("order_id", orderId)
     .maybeSingle();
 
-  if (isMissingPickupOptionColumn(error)) {
+  if (isMissingOrderColumn(error, "pickup_option") || isMissingOrderColumn(error, "takeaway_fee")) {
+    const optionalColumns: string[] = [];
+
+    if (!isMissingOrderColumn(error, "pickup_option")) {
+      optionalColumns.push("pickup_option");
+    }
+
+    if (!isMissingOrderColumn(error, "takeaway_fee")) {
+      optionalColumns.push("takeaway_fee");
+    }
+
+    const fallbackSelect = optionalColumns.length ? `${baseSelect}, ${optionalColumns.join(", ")}` : baseSelect;
+
     ({ data, error } = await adminClient
       .from("orders")
-      .select(baseSelect)
+      .select(fallbackSelect)
       .eq("order_id", orderId)
       .maybeSingle());
   }
@@ -317,6 +333,17 @@ function buildEmailHtml(order: ReceiptOrder, items: ReceiptItemRow[], isConfirma
     `
     : "";
 
+  const takeawayFeeHtml = toNumber(order.takeaway_fee) > 0
+    ? `
+      <tr>
+        <td style="padding:6px 0; color:#d8c89a;">Takeaway Charge</td>
+        <td style="padding:6px 0; text-align:right; color:#d8c89a; font-weight:600;">
+          ${formatCurrency(toNumber(order.takeaway_fee))}
+        </td>
+      </tr>
+    `
+    : "";
+
   return `
     <!doctype html>
     <html lang="en">
@@ -401,6 +428,7 @@ function buildEmailHtml(order: ReceiptOrder, items: ReceiptItemRow[], isConfirma
                     </td>
                   </tr>
                   ${discountHtml}
+                  ${takeawayFeeHtml}
                   ${deliveryFeeHtml}
                   <tr>
                     <td style="padding:14px 0 0; border-top:1px solid rgba(166,124,0,0.22); font-size:18px; font-weight:800; color:#d4a437;">
@@ -456,6 +484,9 @@ function buildEmailText(order: ReceiptOrder, items: ReceiptItemRow[], isConfirma
     `Subtotal: ${formatCurrency(toNumber(order.subtotal))}`,
     order.discount > 0
       ? `Discount: -${formatCurrency(toNumber(order.discount))}`
+      : "",
+    toNumber(order.takeaway_fee) > 0
+      ? `Takeaway Charge: ${formatCurrency(toNumber(order.takeaway_fee))}`
       : "",
     order.delivery_fee > 0
       ? `Delivery Fee: ${formatCurrency(toNumber(order.delivery_fee))}`

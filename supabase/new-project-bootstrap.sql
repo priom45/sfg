@@ -1807,3 +1807,23 @@ CREATE POLICY "Customers can place own orders"
 ALTER PUBLICATION supabase_realtime ADD TABLE site_settings;
 
 -- END MIGRATION: 20260321153000_add_site_settings_and_closure_gate.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260324120000_add_takeaway_fee_to_orders.sql
+-- ===============================================
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'orders'
+      AND column_name = 'takeaway_fee'
+  ) THEN
+    ALTER TABLE public.orders
+      ADD COLUMN takeaway_fee numeric(10,2) NOT NULL DEFAULT 0;
+  END IF;
+END $$;
+
+-- END MIGRATION: 20260324120000_add_takeaway_fee_to_orders.sql

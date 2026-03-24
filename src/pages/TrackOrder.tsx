@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Search, Phone, MessageCircle, ArrowLeft, Package, Bell, PartyPopper, Clock, Truck, ChefHat, Users, Sparkles, ArrowRight, Star, CheckCircle, Wallet, BadgeCheck, User, XCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { getCompletedOrderLabel, getPaymentMethodLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingOnlinePayment, isDineInOrder } from '../lib/orderLabels';
+import { getCompletedOrderLabel, getPaymentMethodLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment, isDineInOrder } from '../lib/orderLabels';
 import { playOrderCompleteSound, playPickupReadyAlert } from '../lib/sounds';
 import type { Order, OrderItem, MenuItem } from '../types';
 import OrderTimeline from '../components/OrderTimeline';
@@ -110,11 +110,11 @@ export default function TrackOrderPage() {
     async function loadQueuePosition(currentOrder: Order) {
       const { data } = await supabase
         .from('orders')
-        .select('id, payment_provider, payment_status')
+        .select('id, order_type, payment_provider, payment_status, total')
         .eq('status', 'pending')
         .lt('placed_at', currentOrder.placed_at);
 
-      setQueueAhead((data || []).filter((queuedOrder) => !isAwaitingOnlinePayment(queuedOrder)).length);
+      setQueueAhead((data || []).filter((queuedOrder) => !isAwaitingOnlinePayment(queuedOrder) && !isAwaitingCounterPayment(queuedOrder)).length);
     }
 
     if (order.order_type === 'pickup' && order.status === 'packed') {
@@ -127,7 +127,7 @@ export default function TrackOrderPage() {
       setShowReadyBanner(false);
     }
 
-    if (order.status === 'pending') {
+    if (order.status === 'pending' && !isAwaitingCounterPayment(order)) {
       void loadQueuePosition(order);
     } else {
       setQueueAhead(0);
@@ -222,9 +222,10 @@ export default function TrackOrderPage() {
   const isDelivered = order?.status === 'delivered';
   const isCancelled = order?.status === 'cancelled';
   const isExpired = order?.status === 'expired';
-  const isInQueue = order?.status === 'pending';
+  const isCounterPaymentPending = order ? isAwaitingCounterPayment(order) : false;
+  const isInQueue = order?.status === 'pending' && !isCounterPaymentPending;
   const isPreparing = order?.status === 'preparing';
-  const isActive = order && !['cancelled', 'expired', 'delivered'].includes(order.status) && !isReadyForPickup;
+  const isActive = order && !['cancelled', 'expired', 'delivered'].includes(order.status) && !isReadyForPickup && !isCounterPaymentPending;
   const showCountdown = isActive && order.estimated_minutes && (order.accepted_at || order.confirmed_at) && ['confirmed', 'preparing'].includes(order.status);
   const serviceModeLabel = order ? getServiceModeLabel(order) : '';
   const readyOrderLabel = order ? getReadyOrderLabel(order) : '';
@@ -302,6 +303,21 @@ export default function TrackOrderPage() {
 
         {order && (
           <div className="max-w-lg space-y-6 animate-fade-in">
+
+            {isCounterPaymentPending && (
+              <div className="relative overflow-hidden rounded-2xl bg-amber-500 p-6 text-center text-white shadow-elevated animate-scale-in backdrop-blur">
+                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_50%,rgba(255,255,255,0.12),transparent)]" />
+                <div className="relative">
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-brand-surface-strong/80 backdrop-blur-sm">
+                    <Wallet size={32} />
+                  </div>
+                  <h2 className="mb-2 text-2xl font-black">Awaiting Counter Payment</h2>
+                  <p className="text-[14px] text-amber-100">
+                    Show your order ID at the counter and complete payment. Your order will join the kitchen queue after staff confirms payment.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {showReadyBanner && isReadyForPickup && (
               <div className="relative overflow-hidden rounded-2xl bg-emerald-500 p-6 text-center text-white shadow-elevated animate-scale-in backdrop-blur">
@@ -460,7 +476,9 @@ export default function TrackOrderPage() {
                 <div className="text-right">
                   <span
                     className={`inline-block rounded-full px-3 py-1 text-[12px] font-semibold capitalize ${
-                      order.status === 'delivered'
+                      isCounterPaymentPending
+                        ? 'bg-amber-500/10 text-amber-400'
+                        : order.status === 'delivered'
                         ? 'bg-emerald-500/10 text-emerald-400'
                         : order.status === 'cancelled' || order.status === 'expired'
                           ? 'bg-red-500/10 text-red-400'
@@ -469,7 +487,9 @@ export default function TrackOrderPage() {
                             : 'bg-brand-gold/10 text-brand-gold'
                     }`}
                   >
-                    {isReadyForPickup
+                    {isCounterPaymentPending
+                      ? 'payment pending'
+                      : isReadyForPickup
                       ? readyOrderLabel
                       : order.status === 'delivered'
                         ? completedOrderLabel
@@ -479,7 +499,15 @@ export default function TrackOrderPage() {
                 </div>
               </div>
 
-              <OrderTimeline currentStatus={order.status} orderType={order.order_type} pickupOption={order.pickup_option} />
+              <OrderTimeline
+                currentStatus={order.status}
+                orderType={order.order_type}
+                pickupOption={order.pickup_option}
+                paymentMethod={order.payment_method}
+                paymentProvider={order.payment_provider}
+                paymentStatus={order.payment_status}
+                total={order.total}
+              />
             </div>
 
             {showCountdown && (

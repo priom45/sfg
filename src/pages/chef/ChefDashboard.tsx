@@ -2,10 +2,10 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ChefHat, LogOut, Clock, Check, Flame, Package, Users, Timer,
-  Store, Truck, Volume2, VolumeX, Bell, Zap, Wallet, BadgeCheck,
+  Store, Truck, Volume2, VolumeX, Bell, Zap, Wallet, BadgeCheck, Copy,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { getCompletedOrderLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingOnlinePayment } from '../../lib/orderLabels';
+import { getCompletedOrderLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment } from '../../lib/orderLabels';
 import { markOrderPaid } from '../../lib/markOrderPaid';
 import { markOrderReady } from '../../lib/markOrderReady';
 import { playNewOrderAlert, playAcceptSound, playOrderCompleteSound } from '../../lib/sounds';
@@ -23,7 +23,7 @@ interface OrderItemRow {
   customizations: { group_name: string; option_name: string; price: number }[] | null;
 }
 
-type Tab = 'queue' | 'preparing' | 'done';
+type Tab = 'payments' | 'queue' | 'preparing' | 'done';
 
 export default function ChefDashboard() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -48,7 +48,7 @@ export default function ChefDashboard() {
       .order('placed_at', { ascending: true });
 
     if (data && data.length > 0) {
-      const pendingCount = data.filter((o) => o.status === 'pending' && !isAwaitingOnlinePayment(o)).length;
+      const pendingCount = data.filter((o) => o.status === 'pending' && !isAwaitingOnlinePayment(o) && !isAwaitingCounterPayment(o)).length;
 
       if (!initialLoadRef.current && soundEnabled && pendingCount > prevPendingCountRef.current) {
         playNewOrderAlert();
@@ -189,7 +189,13 @@ export default function ChefDashboard() {
     navigate('/chef/login');
   }
 
-  const queueOrders = orders.filter((o) => o.status === 'pending' && !isAwaitingOnlinePayment(o));
+  function copyOrderId(orderId: string) {
+    navigator.clipboard.writeText(orderId);
+    showToast('Order ID copied');
+  }
+
+  const paymentOrders = orders.filter((o) => o.status === 'pending' && isAwaitingCounterPayment(o));
+  const queueOrders = orders.filter((o) => o.status === 'pending' && !isAwaitingOnlinePayment(o) && !isAwaitingCounterPayment(o));
   const preparingOrders = orders.filter((o) => o.status === 'preparing' || o.status === 'confirmed');
   const doneOrders = orders.filter((o) => o.status === 'packed' || o.status === 'delivered');
   const todayDone = doneOrders
@@ -201,12 +207,19 @@ export default function ChefDashboard() {
     .sort((a, b) => getDoneOrderTime(b) - getDoneOrderTime(a));
 
   const tabs: { key: Tab; label: string; count: number; icon: typeof Clock }[] = [
+    { key: 'payments', label: 'Payments', count: paymentOrders.length, icon: Wallet },
     { key: 'queue', label: 'Queue', count: queueOrders.length, icon: Users },
     { key: 'preparing', label: 'Preparing', count: preparingOrders.length, icon: Flame },
     { key: 'done', label: 'Done', count: todayDone.length, icon: Check },
   ];
 
-  const displayOrders = tab === 'queue' ? queueOrders : tab === 'preparing' ? preparingOrders : todayDone;
+  const displayOrders = tab === 'payments'
+    ? paymentOrders
+    : tab === 'queue'
+      ? queueOrders
+      : tab === 'preparing'
+        ? preparingOrders
+        : todayDone;
 
   if (loading) {
     return (
@@ -259,20 +272,23 @@ export default function ChefDashboard() {
 
       <div className="sticky top-[57px] z-40 bg-brand-bg/95 backdrop-blur-sm border-b border-brand-border">
         <div className="max-w-2xl mx-auto px-4 py-2">
-          <div className="grid grid-cols-4 gap-2 mb-2">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-2">
+            <StatCard label="Pay" value={paymentOrders.length} color="rose" />
             <StatCard label="Queue" value={queueOrders.length} color="orange" />
             <StatCard label="Making" value={preparingOrders.length} color="amber" />
             <StatCard label="Ready" value={doneOrders.filter(o => o.status === 'packed').length} color="emerald" />
             <StatCard label="Done" value={todayDone.filter(o => o.status === 'delivered').length} color="blue" />
           </div>
-          <div className="flex gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {tabs.map((t) => (
               <button
                 key={t.key}
                 onClick={() => setTab(t.key)}
                 className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-bold transition-all ${
                   tab === t.key
-                    ? t.key === 'queue'
+                    ? t.key === 'payments'
+                      ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/20'
+                      : t.key === 'queue'
                       ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/20'
                       : t.key === 'preparing'
                       ? 'bg-amber-500 text-white shadow-lg shadow-amber-500/20'
@@ -299,15 +315,22 @@ export default function ChefDashboard() {
         {displayOrders.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="w-16 h-16 bg-brand-surface rounded-2xl flex items-center justify-center mb-4">
-              {tab === 'queue' ? <Users size={28} className="text-brand-text-dim" /> :
+              {tab === 'payments' ? <Wallet size={28} className="text-brand-text-dim" /> :
+               tab === 'queue' ? <Users size={28} className="text-brand-text-dim" /> :
                tab === 'preparing' ? <Flame size={28} className="text-brand-text-dim" /> :
                <Check size={28} className="text-brand-text-dim" />}
             </div>
             <p className="text-brand-text-muted font-semibold">
-              {tab === 'queue' ? 'No orders in queue' :
+              {tab === 'payments' ? 'No counter payments waiting' :
+               tab === 'queue' ? 'No orders in queue' :
                tab === 'preparing' ? 'No orders being prepared' :
                'No completed orders today'}
             </p>
+            {tab === 'payments' && (
+              <p className="text-brand-text-dim text-[12px] mt-1">
+                Counter cash and UPI orders will appear here until marked paid
+              </p>
+            )}
             {tab === 'queue' && (
               <p className="text-brand-text-dim text-[12px] mt-1">
                 New orders will appear here with a sound alert
@@ -318,16 +341,20 @@ export default function ChefDashboard() {
 
         {displayOrders.map((order, idx) => {
           const items = orderItemsMap[order.id] || [];
-          const isQueue = order.status === 'pending';
+          const isPaymentPending = isAwaitingCounterPayment(order);
+          const isQueue = order.status === 'pending' && !isPaymentPending;
           const isPreparing = order.status === 'preparing' || order.status === 'confirmed';
           const isReady = order.status === 'packed';
+          const isPaymentTab = tab === 'payments';
           const totalQty = items.reduce((s, i) => s + i.quantity, 0);
 
           return (
             <div
               key={order.id}
               className={`rounded-2xl border p-4 transition-all animate-fade-in ${
-                isQueue
+                isPaymentPending
+                  ? 'bg-brand-surface border-rose-500/30 shadow-lg shadow-rose-500/5'
+                  : isQueue
                   ? 'bg-brand-surface border-orange-500/30 shadow-lg shadow-orange-500/5'
                   : isPreparing
                   ? 'bg-brand-surface border-amber-500/20'
@@ -344,19 +371,32 @@ export default function ChefDashboard() {
                         #{idx + 1}
                       </span>
                     )}
+                    {isPaymentPending && (
+                      <span className="w-7 h-7 bg-rose-500 text-white rounded-lg flex items-center justify-center">
+                        <Wallet size={14} />
+                      </span>
+                    )}
                     {isPreparing && (
                       <span className="w-7 h-7 bg-amber-500/20 text-amber-400 rounded-lg flex items-center justify-center">
                         <Flame size={14} />
                       </span>
                     )}
                     <span className="font-black text-xl text-white">{order.order_id}</span>
+                    <button
+                      onClick={() => copyOrderId(order.order_id)}
+                      className="p-1.5 rounded-lg text-brand-text-dim hover:text-brand-gold hover:bg-brand-surface-light/60 transition-colors"
+                      aria-label={`Copy order ID ${order.order_id}`}
+                    >
+                      <Copy size={14} />
+                    </button>
                     <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider ${
+                      isPaymentPending ? 'bg-rose-500/10 text-rose-400' :
                       isQueue ? 'bg-orange-500/10 text-orange-400' :
                       isPreparing ? 'bg-amber-500/10 text-amber-400' :
                       isReady ? 'bg-emerald-500/10 text-emerald-400' :
                       'bg-brand-text-dim/10 text-brand-text-dim'
                     }`}>
-                      {isQueue ? 'In Queue' : isPreparing ? 'Preparing' : isReady ? getReadyOrderLabel(order) : getCompletedOrderLabel(order)}
+                      {isPaymentPending ? 'Payment Pending' : isQueue ? 'In Queue' : isPreparing ? 'Preparing' : isReady ? getReadyOrderLabel(order) : getCompletedOrderLabel(order)}
                     </span>
                   </div>
                   <p className="text-[13px] text-brand-text-dim mt-1">
@@ -379,16 +419,47 @@ export default function ChefDashboard() {
                 <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg font-bold ${
                   order.payment_status === 'paid'
                     ? 'bg-emerald-500/10 text-emerald-400'
-                    : 'bg-red-500/10 text-red-400'
+                    : isPaymentPending
+                      ? 'bg-rose-500/10 text-rose-400'
+                      : 'bg-red-500/10 text-red-400'
                 }`}>
                   {order.payment_status === 'paid' ? <BadgeCheck size={12} /> : <Wallet size={12} />}
                   {order.payment_status === 'paid'
                     ? 'Paid'
-                    : order.payment_method === 'upi' ? 'UPI Pending' : 'Cash'}
+                    : order.payment_method === 'upi' ? 'UPI Pending' : 'Cash Pending'}
                 </span>
               </div>
 
-              {order.payment_status !== 'paid' && (isQueue || isPreparing || isReady) && (
+              {isPaymentPending && (
+                <div className="rounded-xl border-2 border-rose-500/20 bg-rose-500/5 p-3 mb-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Wallet size={16} className="text-rose-400" />
+                      <div>
+                        <p className="text-[13px] font-bold text-rose-400">
+                          {getPendingPaymentLabel(order)}
+                        </p>
+                        <p className="text-[11px] text-brand-text-dim">
+                          {order.payment_method === 'upi' ? 'Check the customer UPI payment and then mark paid' : 'Collect cash at the counter and then mark paid'} -- {order.order_id} -- {'\u20B9'}{order.total}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => markPaymentCollected(order)}
+                      disabled={payingOrderId === order.id}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-500 text-white text-[12px] font-bold hover:bg-emerald-600 transition-colors active:scale-95 flex items-center gap-1 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <Check size={12} />
+                      {payingOrderId === order.id ? 'Marking...' : 'Mark Paid'}
+                    </button>
+                  </div>
+                  <p className="mt-2 text-[11px] text-brand-text-dim">
+                    After payment is marked, this order moves into the chef queue.
+                  </p>
+                </div>
+              )}
+
+              {order.payment_status !== 'paid' && !isPaymentPending && (isQueue || isPreparing || isReady) && (
                 <div className="rounded-xl border-2 border-red-500/20 bg-red-500/5 p-3 mb-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -405,7 +476,7 @@ export default function ChefDashboard() {
                     <button
                       onClick={() => markPaymentCollected(order)}
                       disabled={payingOrderId === order.id}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-500 text-white text-[12px] font-bold hover:bg-emerald-600 transition-colors active:scale-95 flex items-center gap-1"
+                      className="px-3 py-1.5 rounded-lg bg-emerald-500 text-white text-[12px] font-bold hover:bg-emerald-600 transition-colors active:scale-95 flex items-center gap-1 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <Check size={12} />
                       {payingOrderId === order.id ? 'Marking...' : 'Mark Paid'}
@@ -460,6 +531,14 @@ export default function ChefDashboard() {
                 </button>
               )}
 
+              {isPaymentTab && isPaymentPending && (
+                <div className="mt-2 rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-center">
+                  <p className="text-[12px] font-semibold text-rose-300">
+                    Waiting for counter payment confirmation for order <span className="font-black text-white">{order.order_id}</span>
+                  </p>
+                </div>
+              )}
+
               {isPreparing && (
                 <button
                   onClick={() => completeOrder(order)}
@@ -487,6 +566,18 @@ export default function ChefDashboard() {
         })}
       </main>
 
+      {paymentOrders.length > 0 && tab !== 'payments' && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 animate-slide-up">
+          <button
+            onClick={() => setTab('payments')}
+            className="flex items-center gap-2 bg-rose-500 text-white px-5 py-3 rounded-full font-bold text-[14px] shadow-elevated shadow-rose-500/30 hover:bg-rose-600 transition-all active:scale-95"
+          >
+            <Wallet size={16} />
+            {paymentOrders.length} payment{paymentOrders.length !== 1 ? 's' : ''} waiting
+          </button>
+        </div>
+      )}
+
       {queueOrders.length > 0 && tab !== 'queue' && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 animate-slide-up">
           <button
@@ -504,6 +595,7 @@ export default function ChefDashboard() {
 
 function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   const colorMap: Record<string, string> = {
+    rose: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
     orange: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
     amber: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
     emerald: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',

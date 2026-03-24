@@ -38,11 +38,19 @@ export function getCompletedOrderLabel(order: OrderModeContext) {
 export function getPendingPaymentLabel(order: OrderModeContext) {
   if ((order.total ?? 0) <= 0) return 'No Payment Required';
   if (order.payment_provider === 'razorpay') return 'Online Payment';
-  return order.order_type === 'delivery' ? 'Cash on Delivery' : 'Pay at Counter';
+  if (order.order_type === 'delivery') return 'Cash on Delivery';
+  return order.payment_method === 'upi' ? 'UPI at Counter' : 'Pay at Counter';
 }
 
 export function isAwaitingOnlinePayment(order: PaymentStateContext) {
   return order.payment_provider === 'razorpay' && order.payment_status === 'pending';
+}
+
+export function isAwaitingCounterPayment(order: OrderModeContext) {
+  if ((order.total ?? 0) <= 0) return false;
+  if (order.order_type !== 'pickup') return false;
+  if (order.payment_provider === 'razorpay') return false;
+  return order.payment_status !== 'paid';
 }
 
 export function getPaymentMethodLabel(order: OrderModeContext) {

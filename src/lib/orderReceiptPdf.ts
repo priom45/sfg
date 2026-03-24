@@ -210,6 +210,10 @@ export async function downloadOrderReceiptPdf(order: Order, items: ReceiptItem[]
     addAmountRow('Discount', `- ${formatCurrency(toNumber(order.discount))}`);
   }
 
+  if (toNumber(order.takeaway_fee) > 0) {
+    addAmountRow('Takeaway Charge', formatCurrency(toNumber(order.takeaway_fee)));
+  }
+
   if (toNumber(order.delivery_fee) > 0) {
     addAmountRow('Delivery Fee', formatCurrency(toNumber(order.delivery_fee)));
   }

@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Package, ChefHat, Truck, CheckCircle, XCircle, Clock, Bell, ChevronRight, User } from 'lucide-react';
+import { Package, ChefHat, Truck, CheckCircle, XCircle, Clock, Bell, ChevronRight, User, Wallet } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { getReadyOrderLabel, getServiceModeLabel, isAwaitingOnlinePayment } from '../lib/orderLabels';
+import { getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment } from '../lib/orderLabels';
 import type { Order } from '../types';
 
 const statusConfig: Record<string, { color: string; bg: string; icon: typeof Clock; label: string }> = {
@@ -133,9 +133,12 @@ export default function MyOrders() {
 
 function ActiveOrderCard({ order }: { order: Order }) {
   const isReady = order.status === 'packed' && order.order_type === 'pickup';
-  const config = order.status === 'packed' && order.order_type === 'delivery'
-    ? { color: 'text-sky-400', bg: 'bg-sky-500/10', icon: Package, label: 'Packed' }
-    : statusConfig[order.status] || statusConfig.pending;
+  const isCounterPaymentPending = isAwaitingCounterPayment(order);
+  const config = isCounterPaymentPending
+    ? { color: 'text-amber-400', bg: 'bg-amber-500/10', icon: Wallet, label: 'Payment Pending' }
+    : order.status === 'packed' && order.order_type === 'delivery'
+      ? { color: 'text-sky-400', bg: 'bg-sky-500/10', icon: Package, label: 'Packed' }
+      : statusConfig[order.status] || statusConfig.pending;
   const Icon = config.icon;
   const readyLabel = getReadyOrderLabel(order);
 

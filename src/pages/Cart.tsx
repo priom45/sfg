@@ -25,6 +25,7 @@ import { playOrderSound } from '../lib/sounds';
 import CustomizationModal from '../components/CustomizationModal';
 
 const SESSION_KEYWORDS = ['session expired', 'sign in again', 'please sign in'];
+const TAKEAWAY_CHARGE = 10;
 
 export default function CartPage() {
   const { items, subtotal, itemCount, removeItem, updateQuantity, clearCart, addItem } = useCart();
@@ -110,7 +111,8 @@ export default function CartPage() {
   const automaticDiscount = automaticOffer?.discountAmount || 0;
   const featuredAutomaticOffer = automaticOffer?.offer || activeOffers.find((offer) => getOfferMode(offer) === 'automatic') || null;
   const discount = Math.min(subtotal, couponDiscount + automaticDiscount);
-  const total = Math.max(0, subtotal - discount);
+  const takeawayFee = pickupOption === 'takeaway' ? TAKEAWAY_CHARGE : 0;
+  const total = Math.max(0, subtotal - discount) + takeawayFee;
   const isFreeOrder = total <= 0;
   const serviceModeLabel = getServiceModeLabel({ order_type: 'pickup', pickup_option: pickupOption });
 
@@ -556,7 +558,7 @@ export default function CartPage() {
               </div>
               <div>
                 <span className={`text-[14px] font-bold block ${pickupOption === 'takeaway' ? 'text-white' : 'text-brand-text-muted'}`}>Takeaway</span>
-                <span className="text-[11px] text-brand-text-dim">Pack it to go</span>
+                <span className="text-[11px] text-brand-text-dim">Pack it to go + ₹{TAKEAWAY_CHARGE}</span>
               </div>
             </button>
           </div>
@@ -689,6 +691,12 @@ export default function CartPage() {
               <div className="flex justify-between text-emerald-400">
                 <span className="text-[13px]">Total savings</span>
                 <span className="tabular-nums">-{'\u20B9'}{discount.toFixed(0)}</span>
+              </div>
+            )}
+            {takeawayFee > 0 && (
+              <div className="flex justify-between text-brand-text-muted">
+                <span className="text-[13px]">Takeaway charge</span>
+                <span className="tabular-nums">{'\u20B9'}{takeawayFee.toFixed(0)}</span>
               </div>
             )}
             <div className="border-t border-brand-border pt-2.5 flex justify-between font-bold">

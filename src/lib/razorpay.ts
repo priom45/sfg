@@ -38,6 +38,19 @@ interface CreateRazorpayOrderResponse {
   error?: string;
 }
 
+interface CreateExistingRazorpayOrderResponse {
+  success: boolean;
+  keyId: string;
+  razorpayOrderId: string;
+  appOrderId: string;
+  amount: number;
+  currency: string;
+  customerName: string;
+  customerPhone: string;
+  customerEmail: string;
+  error?: string;
+}
+
 interface VerifyRazorpayPaymentPayload {
   appOrderId: string;
   razorpayOrderId: string;
@@ -63,22 +76,30 @@ let razorpayScriptPromise: Promise<void> | null = null;
 const MISSING_RAZORPAY_FUNCTIONS_MESSAGE =
   'Online payment is not enabled on this Supabase project yet. Deploy the Razorpay Edge Functions first.';
 
-async function ensureFreshToken() {
+async function refreshCustomerSession(errorMessage = 'Please sign in again to continue.') {
+  const { data: refreshedData, error: refreshError } = await customerSupabase.auth.refreshSession();
+  if (refreshError || !refreshedData.session) {
+    throw new Error(errorMessage);
+  }
+
+  return refreshedData.session;
+}
+
+async function ensureFreshToken(options?: { forceRefresh?: boolean; errorMessage?: string }) {
+  const forceRefresh = options?.forceRefresh ?? false;
+  const errorMessage = options?.errorMessage ?? 'Please sign in again to continue.';
+
+  if (forceRefresh) {
+    return refreshCustomerSession(errorMessage);
+  }
+
   const { data: sessionData } = await customerSupabase.auth.getSession();
   if (!sessionData.session) {
-    const { data: refreshedData, error: refreshError } = await customerSupabase.auth.refreshSession();
-    if (refreshError || !refreshedData.session) {
-      throw new Error('Please sign in again to continue.');
-    }
-    return refreshedData.session;
+    return refreshCustomerSession(errorMessage);
   } else {
     const expiresAtMs = sessionData.session.expires_at ? sessionData.session.expires_at * 1000 : 0;
     if (expiresAtMs && expiresAtMs - Date.now() < 60_000) {
-      const { data: refreshedData, error: refreshError } = await customerSupabase.auth.refreshSession();
-      if (refreshError || !refreshedData.session) {
-        throw new Error('Please sign in again to continue.');
-      }
-      return refreshedData.session;
+      return refreshCustomerSession(errorMessage);
     }
   }
 
@@ -149,8 +170,13 @@ export function loadRazorpayScript() {
     const script = document.createElement('script');
     script.src = 'https://checkout.razorpay.com/v1/checkout.js';
     script.async = true;
+    script.dataset.razorpayCheckout = 'true';
     script.onload = () => resolve();
-    script.onerror = () => reject(new Error('Failed to load Razorpay checkout'));
+    script.onerror = () => {
+      razorpayScriptPromise = null;
+      script.remove();
+      reject(new Error('Failed to load Razorpay checkout'));
+    };
     document.body.appendChild(script);
   });
 
@@ -170,7 +196,7 @@ export async function createRazorpayOrder(payload: CreateRazorpayOrderPayload) {
   );
 
   if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401) {
-    session = await ensureFreshToken();
+    session = await ensureFreshToken({ forceRefresh: true });
     const retry = await customerSupabase.functions.invoke<CreateRazorpayOrderResponse>(
       'create-razorpay-order',
       {
@@ -200,6 +226,43 @@ export async function createRazorpayOrder(payload: CreateRazorpayOrderPayload) {
   return data;
 }
 
+export async function createExistingRazorpayOrder(appOrderId: string) {
+  let session = await ensureFreshToken();
+  const invoke = () => customerSupabase.functions.invoke<CreateExistingRazorpayOrderResponse>(
+    'create-existing-razorpay-order',
+    {
+      body: { appOrderId },
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    },
+  );
+
+  const { data, error } = await invoke();
+
+  if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401) {
+    session = await ensureFreshToken({ forceRefresh: true });
+    const retry = await invoke();
+    if (retry.error) {
+      throw await toRazorpayFunctionError(retry.error, 'Failed to start online payment');
+    }
+    if (!retry.data?.success) {
+      throw new Error(retry.data?.error || 'Failed to start online payment');
+    }
+    return retry.data;
+  }
+
+  if (error) {
+    throw await toRazorpayFunctionError(error, 'Failed to start online payment');
+  }
+
+  if (!data?.success) {
+    throw new Error(data?.error || 'Failed to start online payment');
+  }
+
+  return data;
+}
+
 export async function verifyRazorpayPayment(payload: VerifyRazorpayPaymentPayload) {
   let session = await ensureFreshToken();
   const { data, error } = await customerSupabase.functions.invoke<VerifyRazorpayPaymentResponse>(
@@ -213,7 +276,7 @@ export async function verifyRazorpayPayment(payload: VerifyRazorpayPaymentPayloa
   );
 
   if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401) {
-    session = await ensureFreshToken();
+    session = await ensureFreshToken({ forceRefresh: true });
     const retry = await customerSupabase.functions.invoke<VerifyRazorpayPaymentResponse>(
       'verify-razorpay-payment',
       {
@@ -256,7 +319,7 @@ export async function cancelRazorpayPayment(appOrderId: string) {
   );
 
   if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401) {
-    session = await ensureFreshToken();
+    session = await ensureFreshToken({ forceRefresh: true });
     const retry = await customerSupabase.functions.invoke<CancelRazorpayPaymentResponse>(
       'cancel-razorpay-payment',
       {

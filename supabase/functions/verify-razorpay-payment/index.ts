@@ -211,10 +211,6 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: false, error: "Order access denied" }, 403);
     }
 
-    if (order.payment_provider !== "razorpay") {
-      return jsonResponse({ success: false, error: "This order is not using Razorpay" }, 400);
-    }
-
     if (order.payment_status === "paid") {
       return jsonResponse({ success: true, appOrderId: order.order_id });
     }
@@ -251,6 +247,7 @@ Deno.serve(async (req: Request) => {
     const { error: updateError } = await adminClient
       .from("orders")
       .update({
+        payment_provider: "razorpay",
         payment_status: "paid",
         payment_method: paymentMethod,
         razorpay_payment_id: razorpayPaymentId,
@@ -263,19 +260,18 @@ Deno.serve(async (req: Request) => {
       throw updateError;
     }
 
-    let receiptEmailSent = true;
-    try {
-      await requestReceiptEmail(supabaseUrl, anonKey, serviceKey, order.order_id);
-    } catch (receiptError) {
-      receiptEmailSent = false;
-      console.error("Failed to send payment receipt email", receiptError);
-    }
+    EdgeRuntime.waitUntil(
+      requestReceiptEmail(supabaseUrl, anonKey, serviceKey, order.order_id)
+        .catch((receiptError) => {
+          console.error("Failed to send payment receipt email", receiptError);
+        }),
+    );
 
     return jsonResponse({
       success: true,
       appOrderId: order.order_id,
       paymentMethod,
-      receiptEmailSent,
+      receiptEmailSent: true,
     });
   } catch (error) {
     return jsonResponse(

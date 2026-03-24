@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Check, X, ChevronRight, Truck, Store, Filter, Clock, Download } from 'lucide-react';
+import { Check, X, ChevronRight, Truck, Store, Filter, Clock, Download, Wallet } from 'lucide-react';
+import { markOrderPaid } from '../../lib/markOrderPaid';
 import { markOrderReady } from '../../lib/markOrderReady';
 import { downloadOrderReceiptPdf } from '../../lib/orderReceiptPdf';
 import { supabase } from '../../lib/supabase';
-import { getCompletedOrderLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingOnlinePayment, isDineInOrder } from '../../lib/orderLabels';
+import { getCompletedOrderLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment, isDineInOrder } from '../../lib/orderLabels';
 import { useToast } from '../../components/Toast';
-import type { Order, OrderStatus, OrderType } from '../../types';
+import type { Order, OrderStatus } from '../../types';
 
 const pickupFlow: OrderStatus[] = ['confirmed', 'preparing', 'packed', 'delivered'];
 const deliveryFlow: OrderStatus[] = ['confirmed', 'preparing', 'packed', 'out_for_delivery', 'delivered'];
@@ -26,6 +27,9 @@ function getNextStatus(order: Order): OrderStatus | null {
 }
 
 function statusLabel(order: Order): string {
+  if (isAwaitingCounterPayment(order)) {
+    return 'Awaiting Payment';
+  }
   if (order.order_type === 'pickup') {
     if (order.status === 'packed') return getReadyOrderLabel(order);
     if (order.status === 'delivered') return getCompletedOrderLabel(order);
@@ -59,7 +63,9 @@ function nextActionLabel(nextStatus: OrderStatus, order: Order): string {
   return labels[nextStatus] || nextStatus;
 }
 
-function statusColor(status: string, orderType: OrderType): string {
+function statusColor(order: Order): string {
+  if (isAwaitingCounterPayment(order)) return 'bg-amber-500/10 text-amber-400';
+  const { status, order_type: orderType } = order;
   if (orderType === 'pickup' && status === 'packed') return 'bg-green-500/10 text-green-400';
   if (status === 'delivered') return 'bg-green-500/10 text-green-400';
   if (status === 'cancelled' || status === 'expired') return 'bg-red-500/10 text-red-400';
@@ -125,6 +131,7 @@ export default function AdminOrders() {
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [payingOrderId, setPayingOrderId] = useState<string | null>(null);
   const { showToast } = useToast();
 
   const loadOrders = useCallback(async () => {
@@ -209,6 +216,25 @@ export default function AdminOrders() {
     setConfirmingId(null);
     showToast('Order cancelled');
     await loadOrders();
+  }
+
+  async function markPaymentCollected(order: Order) {
+    if (payingOrderId === order.id) return;
+    setPayingOrderId(order.id);
+
+    try {
+      const result = await markOrderPaid(order.order_id);
+      showToast('Payment marked as paid');
+      if (result.receiptEmailSent === false) {
+        showToast('Payment updated, but receipt email failed', 'error');
+      }
+      await loadOrders();
+    } catch (error) {
+      console.error('Failed to mark payment as paid', error);
+      showToast('Failed to mark payment as paid', 'error');
+    } finally {
+      setPayingOrderId(null);
+    }
   }
 
   async function downloadReceipt(order: Order) {
@@ -334,6 +360,7 @@ export default function AdminOrders() {
             const isTerminal = ['cancelled', 'expired', 'delivered'].includes(order.status);
             const isPickupReady = order.order_type === 'pickup' && order.status === 'packed';
             const isConfirming = confirmingId === order.id;
+            const isCounterPaymentPending = isAwaitingCounterPayment(order);
 
             return (
               <div
@@ -346,7 +373,7 @@ export default function AdminOrders() {
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-black text-lg text-white">{order.order_id}</span>
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${statusColor(order.status, order.order_type)}`}>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${statusColor(order)}`}>
                         {statusLabel(order)}
                       </span>
                       <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -400,7 +427,29 @@ export default function AdminOrders() {
                   </div>
                 )}
 
-                {order.status === 'pending' && !isConfirming && (
+                {isCounterPaymentPending && (
+                  <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-2.5 mb-3 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <Wallet size={15} className="text-amber-400 flex-shrink-0" />
+                      <div>
+                        <p className="text-sm text-amber-400 font-semibold">{getPendingPaymentLabel(order)}</p>
+                        <p className="text-xs text-brand-text-dim">
+                          Collect payment at the counter before confirming this order
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => markPaymentCollected(order)}
+                      disabled={payingOrderId === order.id}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-medium hover:bg-emerald-600 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <Check size={14} />
+                      {payingOrderId === order.id ? 'Marking...' : 'Mark Paid'}
+                    </button>
+                  </div>
+                )}
+
+                {order.status === 'pending' && !isCounterPaymentPending && !isConfirming && (
                   <div className="flex items-center gap-2 mt-3 pt-3 border-t border-brand-border">
                     <span className="text-xs text-orange-400 font-medium">
                       Expires: {getExpiryRemaining(order.expires_at)}
@@ -423,7 +472,23 @@ export default function AdminOrders() {
                   </div>
                 )}
 
-                {order.status === 'pending' && isConfirming && (
+                {order.status === 'pending' && isCounterPaymentPending && (
+                  <div className="flex items-center gap-2 mt-3 pt-3 border-t border-brand-border">
+                    <span className="text-xs text-orange-400 font-medium">
+                      Expires: {getExpiryRemaining(order.expires_at)}
+                    </span>
+                    <div className="flex-1" />
+                    <button
+                      onClick={() => cancelOrder(order.id)}
+                      className="flex items-center gap-1 px-3 py-1.5 border border-brand-border rounded-lg text-xs font-medium text-brand-text-muted hover:border-red-500/30 hover:text-red-400 transition-colors"
+                    >
+                      <X size={14} />
+                      Cancel
+                    </button>
+                  </div>
+                )}
+
+                {order.status === 'pending' && !isCounterPaymentPending && isConfirming && (
                   <ConfirmPanel
                     onCancel={() => setConfirmingId(null)}
                     onConfirm={(minutes) => confirmWithTime(order.id, minutes)}

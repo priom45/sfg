@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { ShoppingBag, DollarSign, Clock, TrendingUp } from 'lucide-react';
 import { useToast } from '../../components/Toast';
 import { supabase } from '../../lib/supabase';
-import { isAwaitingOnlinePayment } from '../../lib/orderLabels';
+import { isAwaitingCounterPayment, isAwaitingOnlinePayment } from '../../lib/orderLabels';
 import type { Order } from '../../types';
 
 export default function AdminDashboard() {
@@ -35,7 +35,7 @@ export default function AdminDashboard() {
 
   const visibleOrders = orders.filter((o) => !isAwaitingOnlinePayment(o));
   const todayOrders = visibleOrders.length;
-  const pendingOrders = visibleOrders.filter((o) => o.status === 'pending').length;
+  const pendingOrders = visibleOrders.filter((o) => o.status === 'pending' && !isAwaitingCounterPayment(o)).length;
   const todayRevenue = visibleOrders
     .filter((o) => o.status !== 'cancelled' && o.status !== 'expired')
     .reduce((sum, o) => sum + Number(o.total), 0);
@@ -44,9 +44,44 @@ export default function AdminDashboard() {
   const stats = [
     { label: "Today's Orders", value: todayOrders, icon: ShoppingBag, color: 'bg-blue-500/10 text-blue-400' },
     { label: "Today's Revenue", value: `₹${todayRevenue.toFixed(0)}`, icon: DollarSign, color: 'bg-green-500/10 text-green-400' },
-    { label: 'Pending', value: pendingOrders, icon: Clock, color: 'bg-orange-500/10 text-orange-400' },
+    { label: 'In Queue', value: pendingOrders, icon: Clock, color: 'bg-orange-500/10 text-orange-400' },
     { label: 'Confirmed', value: confirmedOrders, icon: TrendingUp, color: 'bg-emerald-500/10 text-emerald-400' },
   ];
+
+  function getStatusBadge(order: Order) {
+    if (isAwaitingCounterPayment(order)) {
+      return {
+        label: 'awaiting payment',
+        className: 'bg-amber-500/10 text-amber-400',
+      };
+    }
+
+    if (order.status === 'delivered') {
+      return {
+        label: order.status.replace('_', ' '),
+        className: 'bg-green-500/10 text-green-400',
+      };
+    }
+
+    if (order.status === 'cancelled' || order.status === 'expired') {
+      return {
+        label: order.status.replace('_', ' '),
+        className: 'bg-red-500/10 text-red-400',
+      };
+    }
+
+    if (order.status === 'pending') {
+      return {
+        label: order.status.replace('_', ' '),
+        className: 'bg-orange-500/10 text-orange-400',
+      };
+    }
+
+    return {
+      label: order.status.replace('_', ' '),
+      className: 'bg-blue-500/10 text-blue-400',
+    };
+  }
 
   if (loading) {
     return (
@@ -108,13 +143,8 @@ export default function AdminDashboard() {
                     <td className="px-4 py-3 text-brand-text-muted">{order.customer_name}</td>
                     <td className="px-4 py-3 font-medium text-white">₹{order.total}</td>
                     <td className="px-4 py-3">
-                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${
-                        order.status === 'delivered' ? 'bg-green-500/10 text-green-400' :
-                        order.status === 'cancelled' || order.status === 'expired' ? 'bg-red-500/10 text-red-400' :
-                        order.status === 'pending' ? 'bg-orange-500/10 text-orange-400' :
-                        'bg-blue-500/10 text-blue-400'
-                      }`}>
-                        {order.status.replace('_', ' ')}
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${getStatusBadge(order).className}`}>
+                        {getStatusBadge(order).label}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-brand-text-dim text-xs">
