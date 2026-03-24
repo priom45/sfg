@@ -25,6 +25,7 @@ interface RazorpayOptions {
   amount: number;
   currency: string;
   name: string;
+  image?: string;
   description?: string;
   order_id: string;
   prefill?: {

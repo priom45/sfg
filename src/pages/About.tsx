@@ -93,7 +93,7 @@ export default function AboutPage() {
               <div className="space-y-5 mb-8">
                 {[
                   { icon: Phone, label: 'Phone', value: '+91 98765 43210' },
-                  { icon: Mail, label: 'Email', value: 'hello@supremewaffle.com' },
+                  { icon: Mail, label: 'Email', value: 'thesupremewafflee@gmail.com' },
                   { icon: MapPin, label: 'Address', value: 'Police Station Road, Kanuru, Vijayawada' },
                 ].map((item) => (
                   <div key={item.label} className="flex items-center gap-4">

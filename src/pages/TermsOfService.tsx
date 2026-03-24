@@ -83,7 +83,7 @@ export default function TermsOfService() {
 
       <Section title="8. Contact">
         <p>
-          For questions about these terms, contact hello@supremewaffle.com or use the contact form on
+          For questions about these terms, contact thesupremewafflee@gmail.com or use the contact form on
           the About page.
         </p>
       </Section>

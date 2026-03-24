@@ -41,7 +41,7 @@ export default function Footer() {
               </li>
               <li className="flex items-center gap-3 text-brand-text-muted text-[14px]">
                 <Mail size={14} strokeWidth={2.2} className="text-brand-gold-muted flex-shrink-0" />
-                <span>hello@supremewaffle.com</span>
+                <span>thesupremewafflee@gmail.com</span>
               </li>
               <li className="flex items-start gap-3 text-brand-text-muted text-[14px]">
                 <MapPin size={14} strokeWidth={2.2} className="text-brand-gold-muted flex-shrink-0 mt-0.5" />

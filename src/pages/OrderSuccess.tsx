@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { clearCheckoutSuccessOrder } from '../lib/checkoutSuccess';
 import { supabase } from '../lib/supabase';
 import { getPaymentMethodLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment } from '../lib/orderLabels';
-import { createExistingRazorpayOrder, loadRazorpayScript, verifyRazorpayPayment } from '../lib/razorpay';
+import { RAZORPAY_BRAND_IMAGE, createExistingRazorpayOrder, loadRazorpayScript, verifyRazorpayPayment } from '../lib/razorpay';
 import type { Order, MenuItem } from '../types';
 import { useToast } from '../components/Toast';
 import { playOrderSound, playOrderCompleteSound, playPickupReadyAlert } from '../lib/sounds';
@@ -173,6 +173,7 @@ export default function OrderSuccessPage() {
           amount: razorpayOrder.amount,
           currency: razorpayOrder.currency,
           name: 'The Supreme Waffle',
+          image: RAZORPAY_BRAND_IMAGE,
           description: `${serviceModeLabel} Order`,
           order_id: razorpayOrder.razorpayOrderId,
           prefill: {

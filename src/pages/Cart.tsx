@@ -20,7 +20,7 @@ import { getServiceModeLabel } from '../lib/orderLabels';
 import { createCounterOrder } from '../lib/counterOrder';
 import type { MenuItem, PaymentMethod, Offer, PickupOption, SelectedCustomization } from '../types';
 import { useToast } from '../components/Toast';
-import { cancelRazorpayPayment, createRazorpayOrder, loadRazorpayScript, verifyRazorpayPayment } from '../lib/razorpay';
+import { RAZORPAY_BRAND_IMAGE, cancelRazorpayPayment, createRazorpayOrder, loadRazorpayScript, verifyRazorpayPayment } from '../lib/razorpay';
 import { playOrderSound } from '../lib/sounds';
 import CustomizationModal from '../components/CustomizationModal';
 
@@ -196,6 +196,7 @@ export default function CartPage() {
           amount: razorpayOrder.amount,
           currency: razorpayOrder.currency,
           name: 'The Supreme Waffle',
+          image: RAZORPAY_BRAND_IMAGE,
           description: `${serviceModeLabel} Order`,
           order_id: razorpayOrder.razorpayOrderId,
           prefill: {

@@ -85,7 +85,7 @@ export default function PrivacyPolicy() {
 
       <Section title="7. Contact">
         <p>
-          For privacy-related questions, contact The Supreme Waffle at hello@supremewaffle.com or
+          For privacy-related questions, contact The Supreme Waffle at thesupremewafflee@gmail.com or
           visit our contact page at /about.
         </p>
       </Section>

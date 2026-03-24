@@ -75,6 +75,10 @@ let razorpayScriptPromise: Promise<void> | null = null;
 
 const MISSING_RAZORPAY_FUNCTIONS_MESSAGE =
   'Online payment is not enabled on this Supabase project yet. Deploy the Razorpay Edge Functions first.';
+export const RAZORPAY_BRAND_IMAGE =
+  typeof window === 'undefined'
+    ? '/razorpay-logo-badge.svg'
+    : new URL('/razorpay-logo-badge.svg', window.location.origin).toString();
 
 async function refreshCustomerSession(errorMessage = 'Please sign in again to continue.') {
   const { data: refreshedData, error: refreshError } = await customerSupabase.auth.refreshSession();
