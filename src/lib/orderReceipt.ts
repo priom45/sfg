@@ -57,7 +57,9 @@ async function toReceiptFunctionError(error: unknown) {
           if (text.trim()) {
             return new Error(text.trim());
           }
-        } catch {}
+        } catch {
+          return new Error('Receipt email service returned an unexpected response.');
+        }
       }
     }
 

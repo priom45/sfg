@@ -13,16 +13,12 @@ export interface Profile {
   role: 'customer' | 'chef' | 'admin';
 }
 
-const staffAccessMap = {
+const staffRoleMap = {
   'admin@gmail.com': {
     role: 'admin' as const,
-    fullName: 'Admin',
-    password: 'admin@123',
   },
   'chef@gmail.com': {
     role: 'chef' as const,
-    fullName: 'Chef',
-    password: 'chef@123',
   },
 };
 
@@ -159,14 +155,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInStaff = async (email: string, password: string) => {
     const normalizedEmail = email.trim().toLowerCase();
-    const staffAccess = staffAccessMap[normalizedEmail as keyof typeof staffAccessMap];
+    const staffAccess = staffRoleMap[normalizedEmail as keyof typeof staffRoleMap];
 
     if (!staffAccess) {
       return { error: 'Access denied. Authorized staff email required.', role: null };
-    }
-
-    if (password !== staffAccess.password) {
-      return { error: 'Invalid password.', role: null };
     }
 
     await staffSupabase.auth.signOut();
@@ -183,10 +175,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       };
     }
 
+    const staffProfile = await fetchProfile(staffSupabase, data.user.id);
+    if (!staffProfile || staffProfile.role !== staffAccess.role) {
+      await staffSupabase.auth.signOut();
+      clearAuthState();
+      return {
+        error: 'Access denied. Staff role is not configured correctly for this account.',
+        role: null,
+      };
+    }
+
     setSession(data.session ?? null);
     setUser(data.user);
-    await fetchProfile(staffSupabase, data.user.id);
-    return { error: null, role: staffAccess.role };
+    return { error: null, role: staffProfile.role };
   };
 
   const completeProfile = async (fullName: string, phone: string, email: string) => {

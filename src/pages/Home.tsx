@@ -23,9 +23,7 @@ export default function Home() {
   const { addItem } = useCart();
   const { showToast } = useToast();
 
-  useEffect(() => { loadData(); }, []);
-
-  async function loadData() {
+  const loadData = useCallback(async () => {
     const [catRes, bestRes, allRes, offerRes] = await Promise.all([
       supabase.from('categories').select('*').order('display_order'),
       supabase.from('menu_items').select('*').eq('is_available', true).order('rating', { ascending: false }).limit(10),
@@ -37,7 +35,9 @@ export default function Home() {
     if (allRes.data) setAllItems(allRes.data);
     if (offerRes.error) showToast(offerRes.error.message || 'Failed to load offers', 'error');
     setOffers(offerRes.data || []);
-  }
+  }, [showToast]);
+
+  useEffect(() => { void loadData(); }, [loadData]);
 
   useEffect(() => {
     setBannerIdx((current) => {

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Package, ChefHat, Truck, CheckCircle, XCircle, Clock, Bell, ChevronRight, User } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { getServiceModeLabel, isAwaitingOnlinePayment } from '../lib/orderLabels';
+import { getReadyOrderLabel, getServiceModeLabel, isAwaitingOnlinePayment } from '../lib/orderLabels';
 import type { Order } from '../types';
 
 const statusConfig: Record<string, { color: string; bg: string; icon: typeof Clock; label: string }> = {
@@ -132,9 +132,12 @@ export default function MyOrders() {
 }
 
 function ActiveOrderCard({ order }: { order: Order }) {
-  const isReady = order.status === 'packed';
-  const config = statusConfig[order.status] || statusConfig.pending;
+  const isReady = order.status === 'packed' && order.order_type === 'pickup';
+  const config = order.status === 'packed' && order.order_type === 'delivery'
+    ? { color: 'text-sky-400', bg: 'bg-sky-500/10', icon: Package, label: 'Packed' }
+    : statusConfig[order.status] || statusConfig.pending;
   const Icon = config.icon;
+  const readyLabel = getReadyOrderLabel(order);
 
   return (
     <Link
@@ -148,7 +151,7 @@ function ActiveOrderCard({ order }: { order: Order }) {
       {isReady && (
         <div className="flex items-center gap-2 mb-2.5">
           <Bell size={14} className="text-brand-gold animate-pulse" />
-          <span className="text-[13px] font-bold text-brand-gold">Ready for pickup!</span>
+          <span className="text-[13px] font-bold text-brand-gold">{readyLabel}!</span>
         </div>
       )}
       <div className="flex items-center justify-between">

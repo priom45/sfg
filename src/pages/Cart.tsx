@@ -115,6 +115,13 @@ export default function CartPage() {
   const serviceModeLabel = getServiceModeLabel({ order_type: 'pickup', pickup_option: pickupOption });
 
   useEffect(() => {
+    if (isFreeOrder || paymentMethod !== 'card') return;
+    void loadRazorpayScript().catch((error) => {
+      console.error('Failed to preload Razorpay checkout', error);
+    });
+  }, [isFreeOrder, paymentMethod]);
+
+  useEffect(() => {
     if (!appliedOffer) return;
 
     const latestOffer = activeOffers.find((offer) => offer.id === appliedOffer.id) || appliedOffer;
@@ -135,40 +142,25 @@ export default function CartPage() {
     }
   }, [activeOffers, addOnTotal, appliedOffer, itemCount, subtotal]);
 
-  async function syncProfileDetails() {
-    const customerEmail = profile?.email?.trim() || user?.email?.trim() || '';
-
-    if (user) {
-      const { error: profileUpdateError } = await customerSupabase.from('profiles').update({
-        full_name: name.trim(),
-        phone: phone.trim(),
-      }).eq('id', user.id);
-
-      if (profileUpdateError) {
-        console.error('Failed to update profile before placing order', profileUpdateError);
-      }
-    }
-
-    return customerEmail;
+  function getCustomerEmail() {
+    return profile?.email?.trim() || user?.email?.trim() || '';
   }
 
-  async function ensureFreshSession() {
-    const { data, error } = await customerSupabase.auth.getSession();
+  async function syncProfileDetails() {
+    if (!user) return;
 
-    if (error || !data.session) {
-      throw new Error('Please sign in to place your order.');
-    }
+    const { error: profileUpdateError } = await customerSupabase.from('profiles').update({
+      full_name: name.trim(),
+      phone: phone.trim(),
+    }).eq('id', user.id);
 
-    const expiresAtMs = data.session.expires_at ? data.session.expires_at * 1000 : 0;
-    if (expiresAtMs && expiresAtMs - Date.now() < 60_000) {
-      const { error: refreshError } = await customerSupabase.auth.refreshSession();
-      if (refreshError) {
-        throw new Error('Please sign in to place your order.');
-      }
+    if (profileUpdateError) {
+      console.error('Failed to update profile before placing order', profileUpdateError);
     }
   }
 
   async function startRazorpayCheckout(customerEmail: string) {
+    const razorpayScriptPromise = loadRazorpayScript();
     const razorpayOrder = await createRazorpayOrder({
       customerName: name.trim(),
       customerPhone: phone.trim(),
@@ -187,7 +179,7 @@ export default function CartPage() {
     });
 
     try {
-      await loadRazorpayScript();
+      await razorpayScriptPromise;
 
       const RazorpayCheckout = window.Razorpay;
       if (!RazorpayCheckout) {
@@ -294,8 +286,10 @@ export default function CartPage() {
     setSubmitting(true);
 
     try {
-      await ensureFreshSession();
-      const customerEmail = await syncProfileDetails();
+      const customerEmail = getCustomerEmail();
+      void syncProfileDetails().catch((error) => {
+        console.error('Failed to sync profile details during checkout', error);
+      });
 
       if (paymentMethod === 'card' && !isFreeOrder) {
         await startRazorpayCheckout(customerEmail);
@@ -715,14 +709,14 @@ export default function CartPage() {
               className="btn-primary w-full text-center text-[15px] font-extrabold py-3.5 rounded-xl tracking-tight"
             >
               {!user
-                ? 'Sign In to Place Order'
+                ? 'Sign In to Continue'
                 : settings && !settings.site_is_open
                 ? settings.reopening_text || 'Orders Closed'
                 : submitting
                 ? paymentMethod === 'card' && !isFreeOrder ? 'Opening Payment...' : 'Placing Order...'
                 : isFreeOrder
-                ? 'Place Order -- FREE'
-                : <>Place Order -- {'\u20B9'}{total.toFixed(0)}</>}
+                ? 'Proceed to Checkout • FREE'
+                : <>Proceed to Checkout • {'\u20B9'}{total.toFixed(0)}</>}
             </motion.button>
           </div>
         </div>

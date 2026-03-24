@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { Search, Phone, MessageCircle, ArrowLeft, Package, Bell, PartyPopper, Clock, Truck, ChefHat, Users, Sparkles, ArrowRight, Star, CheckCircle, Wallet, BadgeCheck, User } from 'lucide-react';
+import { Search, Phone, MessageCircle, ArrowLeft, Package, Bell, PartyPopper, Clock, Truck, ChefHat, Users, Sparkles, ArrowRight, Star, CheckCircle, Wallet, BadgeCheck, User, XCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { getCompletedOrderLabel, getPaymentMethodLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingOnlinePayment, isDineInOrder } from '../lib/orderLabels';
 import { playOrderCompleteSound, playPickupReadyAlert } from '../lib/sounds';
@@ -71,6 +71,15 @@ function PrepCountdown({ confirmedAt, estimatedMinutes }: { confirmedAt: string;
       </p>
     </div>
   );
+}
+
+function getItemCustomizations(item: Pick<OrderItem, 'customizations'>) {
+  return Array.isArray(item.customizations) ? item.customizations : [];
+}
+
+function getItemLineTotal(item: Pick<OrderItem, 'quantity' | 'unit_price' | 'customizations'>) {
+  const customizationTotal = getItemCustomizations(item).reduce((sum, customization) => sum + customization.price, 0);
+  return (item.unit_price + customizationTotal) * item.quantity;
 }
 
 export default function TrackOrderPage() {
@@ -209,7 +218,10 @@ export default function TrackOrderPage() {
   }
 
   const isReadyForPickup = order?.order_type === 'pickup' && order?.status === 'packed';
+  const isDeliveryPacked = order?.order_type === 'delivery' && order?.status === 'packed';
   const isDelivered = order?.status === 'delivered';
+  const isCancelled = order?.status === 'cancelled';
+  const isExpired = order?.status === 'expired';
   const isInQueue = order?.status === 'pending';
   const isPreparing = order?.status === 'preparing';
   const isActive = order && !['cancelled', 'expired', 'delivered'].includes(order.status) && !isReadyForPickup;
@@ -310,6 +322,21 @@ export default function TrackOrderPage() {
               </div>
             )}
 
+            {isDeliveryPacked && (
+              <div className="relative overflow-hidden rounded-2xl bg-sky-500 p-6 text-center text-white shadow-elevated animate-scale-in backdrop-blur">
+                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_50%,rgba(255,255,255,0.12),transparent)]" />
+                <div className="relative">
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-brand-surface-strong/80 backdrop-blur-sm">
+                    <Package size={32} />
+                  </div>
+                  <h2 className="mb-2 text-2xl font-black">Order Packed</h2>
+                  <p className="text-[14px] text-sky-100">
+                    Your order is packed and will move to the next delivery step shortly
+                  </p>
+                </div>
+              </div>
+            )}
+
             {isInQueue && (
               <div className="relative overflow-hidden rounded-2xl bg-orange-500 p-6 text-center text-white shadow-elevated animate-scale-in backdrop-blur">
                 <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_50%,rgba(255,255,255,0.12),transparent)]" />
@@ -349,6 +376,36 @@ export default function TrackOrderPage() {
                     {order.estimated_minutes
                       ? `Please wait, your food will be ready in about ${order.estimated_minutes} minutes`
                       : 'Your food is being freshly prepared'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {isCancelled && (
+              <div className="relative overflow-hidden rounded-2xl bg-red-500 p-6 text-center text-white shadow-elevated animate-scale-in backdrop-blur">
+                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_50%,rgba(255,255,255,0.12),transparent)]" />
+                <div className="relative">
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-brand-surface-strong/80 backdrop-blur-sm">
+                    <XCircle size={32} />
+                  </div>
+                  <h2 className="mb-2 text-2xl font-black">Order Cancelled</h2>
+                  <p className="text-[14px] text-red-100">
+                    This order was cancelled by the restaurant
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {isExpired && (
+              <div className="relative overflow-hidden rounded-2xl bg-orange-500 p-6 text-center text-white shadow-elevated animate-scale-in backdrop-blur">
+                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_50%,rgba(255,255,255,0.12),transparent)]" />
+                <div className="relative">
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-brand-surface-strong/80 backdrop-blur-sm">
+                    <Clock size={32} />
+                  </div>
+                  <h2 className="mb-2 text-2xl font-black">Order Expired</h2>
+                  <p className="text-[14px] text-orange-100">
+                    This order was not confirmed in time
                   </p>
                 </div>
               </div>
@@ -436,7 +493,11 @@ export default function TrackOrderPage() {
               <div className="rounded-2xl bg-brand-gold/10 p-6 backdrop-blur-sm">
                 <p className="text-[14px] leading-relaxed text-brand-text-muted">
                   {order.order_type === 'delivery'
-                    ? 'Your order is being prepared. Estimated delivery time: ~30 minutes'
+                    ? order.status === 'out_for_delivery'
+                      ? 'Our delivery partner is on the way with your waffles.'
+                      : order.status === 'packed'
+                        ? 'Your order is packed and will move to delivery shortly.'
+                        : 'Your order is being prepared. Estimated delivery time: ~30 minutes'
                     : isDineIn
                       ? 'We are preparing your dine-in order. We will notify you when it is ready to serve.'
                       : 'We are preparing your takeaway order. You will be notified when it is ready for pickup.'}
@@ -451,12 +512,24 @@ export default function TrackOrderPage() {
                 </h3>
                 <div className="space-y-3">
                   {orderItems.map((item) => (
-                    <div key={item.id} className="flex items-center justify-between text-[14px]">
-                      <span className="text-brand-text-muted">
-                        {item.quantity}x {item.item_name}
-                      </span>
+                    <div key={item.id} className="flex items-start justify-between gap-3 text-[14px]">
+                      <div>
+                        <span className="text-brand-text-muted">
+                          {item.quantity}x {item.item_name}
+                        </span>
+                        {getItemCustomizations(item).length > 0 && (
+                          <div className="mt-1 space-y-1">
+                            {getItemCustomizations(item).map((customization, index) => (
+                              <p key={`${item.id}-${index}`} className="text-[12px] text-brand-text-dim">
+                                {customization.group_name}: {customization.option_name}
+                                {customization.price > 0 ? ` (+₹${customization.price})` : ''}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                       <span className="font-semibold tabular-nums text-white">
-                        {'\u20B9'}{(item.unit_price * item.quantity).toFixed(0)}
+                        {'\u20B9'}{getItemLineTotal(item).toFixed(0)}
                       </span>
                     </div>
                   ))}

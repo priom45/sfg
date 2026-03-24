@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { CheckCircle, Clock, Copy, RotateCcw, Store, Truck, ChefHat, Users, Bell, Sparkles, ArrowRight, Star, Wallet } from 'lucide-react';
+import { CheckCircle, Clock, Copy, RotateCcw, Store, Truck, ChefHat, Users, Bell, Sparkles, ArrowRight, Star, Wallet, Package, XCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clearCheckoutSuccessOrder } from '../lib/checkoutSuccess';
 import { supabase } from '../lib/supabase';
@@ -99,13 +99,16 @@ export default function OrderSuccessPage() {
       if (currentOrder.status === 'preparing') {
         showToast('Chef accepted your order!');
       } else if (currentOrder.status === 'packed') {
-        playOrderCompleteSound();
-        showToast('Your order is ready!');
-      } else if (currentOrder.status === 'delivered' && currentOrder.order_type === 'pickup') {
-        if (!pickupAlertPlayedRef.current) {
-          pickupAlertPlayedRef.current = true;
-          playPickupReadyAlert();
+        if (currentOrder.order_type === 'pickup') {
+          playOrderCompleteSound();
+          showToast('Your order is ready!');
+        } else {
+          showToast('Your order is packed and dispatching soon.');
         }
+      } else if (currentOrder.status === 'out_for_delivery') {
+        showToast('Your order is on the way!');
+      } else if (currentOrder.status === 'cancelled') {
+        showToast('This order has been cancelled.', 'error');
       }
     }
 
@@ -158,13 +161,16 @@ export default function OrderSuccessPage() {
   }
 
   const isExpired = order.status === 'expired';
+  const isCancelled = order.status === 'cancelled';
   const isPending = order.status === 'pending';
   const isPickup = order.order_type === 'pickup';
   const isPreparing = order.status === 'preparing';
-  const isReady = order.status === 'packed';
+  const isPickupReady = isPickup && order.status === 'packed';
+  const isDeliveryPacked = !isPickup && order.status === 'packed';
+  const isOutForDelivery = order.status === 'out_for_delivery';
   const isDelivered = order.status === 'delivered';
-  const isConfirmed = order.status !== 'pending' && order.status !== 'expired' && order.status !== 'cancelled';
-  const showSpecials = isDelivered || isReady;
+  const isConfirmed = order.status === 'confirmed';
+  const showSpecials = isDelivered || isPickupReady;
   const serviceModeLabel = getServiceModeLabel(order);
   const readyOrderLabel = getReadyOrderLabel(order);
 
@@ -178,9 +184,26 @@ export default function OrderSuccessPage() {
       >
 
         <AnimatePresence mode="wait">
-        {isReady && (
+        {isPickupReady && (
           <motion.div key="ready" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }}>
             <PickupReadyBanner order={order} />
+          </motion.div>
+        )}
+
+        {isDeliveryPacked && (
+          <motion.div key="delivery-packed" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }}>
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+              className="w-20 h-20 bg-sky-500/10 border border-sky-500/20 rounded-full flex items-center justify-center mx-auto mb-6"
+            >
+              <Package size={40} className="text-sky-400" />
+            </motion.div>
+            <h1 className="text-2xl font-extrabold tracking-tight text-white mb-2">Order Packed!</h1>
+            <p className="text-brand-text-muted mb-8">
+              Your order is packed and will move to the next delivery step shortly.
+            </p>
           </motion.div>
         )}
 
@@ -222,7 +245,24 @@ export default function OrderSuccessPage() {
           </motion.div>
         )}
 
-        {isConfirmed && !isPreparing && !isReady && !isDelivered && (
+        {isOutForDelivery && (
+          <motion.div key="out-for-delivery" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }}>
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+              className="w-20 h-20 bg-sky-500/10 border border-sky-500/20 rounded-full flex items-center justify-center mx-auto mb-6"
+            >
+              <Truck size={40} className="text-sky-400" />
+            </motion.div>
+            <h1 className="text-2xl font-extrabold tracking-tight text-white mb-2">Out for Delivery!</h1>
+            <p className="text-brand-text-muted mb-8">
+              Our delivery partner is on the way with your waffles.
+            </p>
+          </motion.div>
+        )}
+
+        {isConfirmed && (
           <motion.div key="confirmed" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }}>
             <motion.div
               initial={{ scale: 0.8, opacity: 0 }}
@@ -238,6 +278,21 @@ export default function OrderSuccessPage() {
                 ? 'Your waffles are being prepared. We will notify you when ready.'
                 : 'Your waffles are being prepared and will be delivered soon.'}
             </p>
+          </motion.div>
+        )}
+
+        {isCancelled && (
+          <motion.div key="cancelled" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }}>
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+              className="w-20 h-20 bg-red-500/10 border border-red-500/20 rounded-full flex items-center justify-center mx-auto mb-6"
+            >
+              <XCircle size={40} className="text-red-400" />
+            </motion.div>
+            <h1 className="text-2xl font-extrabold tracking-tight text-white mb-2">Order Cancelled</h1>
+            <p className="text-brand-text-muted mb-8">This order was cancelled by the restaurant.</p>
           </motion.div>
         )}
 
@@ -258,14 +313,14 @@ export default function OrderSuccessPage() {
         </AnimatePresence>
 
         <div className="rounded-2xl border p-6 mb-6 animate-scale-in bg-brand-surface border-brand-border">
-          {isPickup && !isExpired && (
+          {isPickup && !isExpired && !isCancelled && (
             <div className="flex items-center justify-center gap-2 mb-4">
               <Store size={16} className="text-brand-gold" />
               <span className="text-[14px] font-bold text-brand-gold uppercase tracking-wider">{serviceModeLabel} Order</span>
             </div>
           )}
 
-          {!isPickup && !isExpired && (
+          {!isPickup && !isExpired && !isCancelled && (
             <div className="flex items-center justify-center gap-2 mb-4">
               <Truck size={16} className="text-sky-400" />
               <span className="text-[14px] font-bold text-sky-400 uppercase tracking-wider">Delivery Order</span>
@@ -302,11 +357,20 @@ export default function OrderSuccessPage() {
             </div>
           )}
 
-          {isReady && (
+          {isPickupReady && (
             <div className="mt-4 bg-emerald-500/10 rounded-2xl px-4 py-3 border border-emerald-500/20 animate-pulse">
               <p className="text-[14px] text-emerald-400 font-bold flex items-center justify-center gap-2">
                 <Bell size={16} />
                 Your order is complete! {readyOrderLabel}
+              </p>
+            </div>
+          )}
+
+          {isDeliveryPacked && (
+            <div className="mt-4 bg-sky-500/10 rounded-2xl px-4 py-3 border border-sky-500/20">
+              <p className="text-[14px] text-sky-400 font-semibold flex items-center justify-center gap-2">
+                <Package size={16} />
+                Your order is packed and dispatching soon.
               </p>
             </div>
           )}
@@ -327,17 +391,15 @@ export default function OrderSuccessPage() {
             </div>
           )}
 
-          {!isPickup && isConfirmed && !isPreparing && !isReady && !isDelivered && (
+          {!isPickup && isOutForDelivery && (
             <div className="mt-4 bg-sky-500/10 rounded-2xl px-4 py-3 border border-sky-500/20">
               <p className="text-[14px] text-sky-400 font-semibold">
-                {order.status === 'out_for_delivery'
-                  ? 'Our delivery partner is on the way with your waffles!'
-                  : 'Your order is being prepared and will be delivered soon.'}
+                Our delivery partner is on the way with your waffles!
               </p>
             </div>
           )}
 
-          {order.payment_method === 'cod' && order.payment_status !== 'paid' && !isDelivered && !isExpired && (
+          {order.payment_method === 'cod' && order.payment_status !== 'paid' && !isDelivered && !isExpired && !isCancelled && (
             <PaymentInstructionCard order={order} isPickup={isPickup} />
           )}
 
@@ -378,12 +440,12 @@ export default function OrderSuccessPage() {
         )}
 
         <div className="flex flex-col gap-3">
-          {(isConfirmed || isPending) && !isDelivered && (
+          {!isDelivered && !isCancelled && !isExpired && (
             <Link to={`/track/${order.order_id}`} className="btn-primary w-full text-center">
               Track Order
             </Link>
           )}
-          {isExpired && (
+          {(isExpired || isCancelled) && (
             <Link to="/menu" className="btn-primary w-full text-center flex items-center justify-center gap-2">
               <RotateCcw size={18} strokeWidth={2.2} />
               Order Again

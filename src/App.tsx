@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { CartProvider } from './contexts/CartContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { SiteSettingsProvider } from './contexts/SiteSettingsContext';
@@ -31,7 +31,7 @@ import AdminMessages from './pages/admin/AdminMessages';
 import AdminWebsite from './pages/admin/AdminWebsite';
 import ChefLogin from './pages/chef/ChefLogin';
 import ChefDashboard from './pages/chef/ChefDashboard';
-import type { ReactNode } from 'react';
+import { useLayoutEffect, type ReactNode } from 'react';
 import { useSiteSettings } from './hooks/useSiteSettings';
 
 function LoadingSpinner() {
@@ -86,9 +86,21 @@ function CustomerLayout({ children }: { children: ReactNode }) {
   );
 }
 
+function ScrollToTop() {
+  const { pathname, search, hash } = useLocation();
+
+  useLayoutEffect(() => {
+    if (hash) return;
+    window.scrollTo(0, 0);
+  }, [pathname, search, hash]);
+
+  return null;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
+      <ScrollToTop />
       <RouteSeo />
       <SiteSettingsProvider>
         <AuthProvider>
