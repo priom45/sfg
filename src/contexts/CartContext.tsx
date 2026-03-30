@@ -8,7 +8,7 @@ interface CartState {
 }
 
 type CartAction =
-  | { type: 'ADD_ITEM'; payload: { menuItem: MenuItem; quantity: number; customizations: SelectedCustomization[] } }
+  | { type: 'ADD_ITEM'; payload: { id: string; menuItem: MenuItem; quantity: number; customizations: SelectedCustomization[] } }
   | { type: 'REMOVE_ITEM'; payload: string }
   | { type: 'UPDATE_QUANTITY'; payload: { id: string; quantity: number } }
   | { type: 'CLEAR_CART' }
@@ -24,9 +24,9 @@ function cartReducer(state: CartState, action: CartAction): CartState {
 
   switch (action.type) {
     case 'ADD_ITEM': {
-      const { menuItem, quantity, customizations } = action.payload;
+      const { id, menuItem, quantity, customizations } = action.payload;
       const newItem: CartItem = {
-        id: `${menuItem.id}-${Date.now()}`,
+        id,
         menu_item: menuItem,
         quantity,
         customizations,
@@ -67,7 +67,7 @@ function cartReducer(state: CartState, action: CartAction): CartState {
 }
 
 interface CartContextType extends CartState {
-  addItem: (menuItem: MenuItem, quantity: number, customizations: SelectedCustomization[]) => void;
+  addItem: (menuItem: MenuItem, quantity: number, customizations: SelectedCustomization[]) => string;
   removeItem: (id: string) => void;
   updateQuantity: (id: string, quantity: number) => void;
   clearCart: () => void;
@@ -95,7 +95,12 @@ export function CartProvider({ children }: { children: ReactNode }) {
   }, [state.items]);
 
   const addItem = (menuItem: MenuItem, quantity: number, customizations: SelectedCustomization[]) => {
-    dispatch({ type: 'ADD_ITEM', payload: { menuItem, quantity, customizations } });
+    const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${menuItem.id}-${Date.now()}`;
+
+    dispatch({ type: 'ADD_ITEM', payload: { id, menuItem, quantity, customizations } });
+    return id;
   };
 
   const removeItem = (id: string) => dispatch({ type: 'REMOVE_ITEM', payload: id });

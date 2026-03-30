@@ -7,12 +7,44 @@ const legacyStorageKey = `sb-${projectRef}-auth-token`;
 const customerStorageKey = `${legacyStorageKey}-customer`;
 const staffStorageKey = `${legacyStorageKey}-staff`;
 
+type ClientRegistry = Record<string, SupabaseClient>;
+
+declare global {
+  interface Window {
+    __supremeWaffleSupabaseClients__?: ClientRegistry;
+  }
+}
+
+function getClientRegistry(): ClientRegistry {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  if (!window.__supremeWaffleSupabaseClients__) {
+    window.__supremeWaffleSupabaseClients__ = {};
+  }
+
+  return window.__supremeWaffleSupabaseClients__;
+}
+
 function createScopedSupabaseClient(storageKey: string) {
-  return createClient(supabaseUrl, supabaseAnonKey, {
+  const registry = getClientRegistry();
+  const existingClient = registry[storageKey];
+  if (existingClient) {
+    return existingClient;
+  }
+
+  const client = createClient(supabaseUrl, supabaseAnonKey, {
     auth: {
       storageKey,
     },
   });
+
+  if (typeof window !== 'undefined') {
+    registry[storageKey] = client;
+  }
+
+  return client;
 }
 
 function getBrowserPathname() {

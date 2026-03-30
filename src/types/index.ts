@@ -18,6 +18,7 @@ export interface MenuItem {
   is_veg: boolean;
   is_eggless: boolean;
   is_available: boolean;
+  has_customizations?: boolean;
   display_order: number;
 }
 
@@ -34,8 +35,27 @@ export interface CustomizationOption {
   group_id: string;
   name: string;
   price: number;
+  created_at?: string;
+  preview_image_url: string;
+  preview_image_source?: 'item' | 'category' | 'default' | null;
   is_available: boolean;
   display_order: number;
+}
+
+export interface CustomizationGroupTarget {
+  id: string;
+  group_id: string;
+  category_id: string | null;
+  menu_item_id: string | null;
+}
+
+export interface CustomizationOptionPreviewOverride {
+  id: string;
+  group_id: string;
+  option_name: string;
+  category_id: string | null;
+  menu_item_id: string | null;
+  preview_image_url: string;
 }
 
 export interface DeliveryZone {

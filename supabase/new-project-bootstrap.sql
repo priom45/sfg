@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS customization_options (
   group_id uuid NOT NULL REFERENCES customization_groups(id),
   name text NOT NULL,
   price numeric(10,2) NOT NULL DEFAULT 0,
+  preview_image_url text NOT NULL DEFAULT '',
   is_available boolean NOT NULL DEFAULT true,
   display_order integer NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now()
@@ -298,18 +299,15 @@ CREATE POLICY "Anyone can view active offers"
     - Anyone can view their own order by order_id
 */
 
+CREATE SEQUENCE IF NOT EXISTS public.order_id_sequence
+  AS bigint
+  START WITH 1
+  INCREMENT BY 1;
+
 CREATE OR REPLACE FUNCTION generate_order_id()
 RETURNS text AS $$
-DECLARE
-  new_id text;
-  exists_check boolean;
 BEGIN
-  LOOP
-    new_id := 'SW-' || LPAD(FLOOR(RANDOM() * 10000)::text, 4, '0');
-    SELECT EXISTS(SELECT 1 FROM orders WHERE order_id = new_id) INTO exists_check;
-    EXIT WHEN NOT exists_check;
-  END LOOP;
-  RETURN new_id;
+  RETURN 'SW-' || nextval('public.order_id_sequence')::text;
 END;
 $$ LANGUAGE plpgsql;
 

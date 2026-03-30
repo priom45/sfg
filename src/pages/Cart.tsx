@@ -17,6 +17,8 @@ import {
 import { customerSupabase } from '../lib/supabase';
 import { readCheckoutSuccessOrder, storeCheckoutSuccessOrder } from '../lib/checkoutSuccess';
 import { getServiceModeLabel } from '../lib/orderLabels';
+import { menuItemSupportsCustomizations } from '../lib/menuItems';
+import { fetchCustomizationAvailability, itemHasAssignedCustomizations, type CustomizationAvailability } from '../lib/customizations';
 import { createCounterOrder } from '../lib/counterOrder';
 import type { MenuItem, PaymentMethod, Offer, PickupOption, SelectedCustomization } from '../types';
 import { useToast } from '../components/Toast';
@@ -43,7 +45,13 @@ export default function CartPage() {
   const [appliedOffer, setAppliedOffer] = useState<Offer | null>(null);
   const [couponError, setCouponError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [editingItem, setEditingItem] = useState<{ cartItemId: string; menuItem: MenuItem } | null>(null);
+  const [editingItem, setEditingItem] = useState<{
+    cartItemId: string;
+    menuItem: MenuItem;
+    quantity: number;
+    customizations: SelectedCustomization[];
+  } | null>(null);
+  const [customizationAvailability, setCustomizationAvailability] = useState<CustomizationAvailability | null>(null);
   const pendingSuccessOrderId = readCheckoutSuccessOrder();
 
   useEffect(() => {
@@ -60,6 +68,16 @@ export default function CartPage() {
 
   useEffect(() => {
     void loadActiveOffers();
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        setCustomizationAvailability(await fetchCustomizationAvailability());
+      } catch (error) {
+        console.error('Failed to load customization availability', error);
+      }
+    })();
   }, []);
 
   async function loadActiveOffers() {
@@ -398,78 +416,96 @@ export default function CartPage() {
 
         <div className="space-y-2.5 mb-6">
           <AnimatePresence initial={false}>
-          {items.map((item) => (
-            <motion.div
-              key={item.id}
-              layout
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -60, height: 0, marginBottom: 0, transition: { duration: 0.25, ease: 'easeIn' } }}
-              transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-              className="bg-brand-surface rounded-xl p-3.5 border border-brand-border flex gap-3"
-            >
-              <img
-                src={item.menu_item.image_url}
-                alt={item.menu_item.name}
-                className="w-16 h-16 rounded-lg object-cover flex-shrink-0"
-              />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-start justify-between gap-2">
-                  <h3 className="font-bold text-white text-[14px] leading-snug">{item.menu_item.name}</h3>
-                  <button
-                    onClick={() => removeItem(item.id)}
-                    className="p-1 hover:bg-red-500/10 rounded-lg text-brand-text-dim hover:text-red-400 transition-colors flex-shrink-0"
-                  >
-                    <Trash2 size={14} strokeWidth={2.2} />
-                  </button>
-                </div>
+          {items.map((item) => {
+            const supportsCustomizations = customizationAvailability
+              ? itemHasAssignedCustomizations(item.menu_item, customizationAvailability)
+              : menuItemSupportsCustomizations(item.menu_item);
 
-                {item.customizations.length > 0 && (
-                  <div className="mt-1 flex items-start gap-1.5">
-                    <div className="flex-1 min-w-0">
-                      <CartCustomizations customizations={item.customizations} />
+            return (
+              <motion.div
+                key={item.id}
+                layout
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -60, height: 0, marginBottom: 0, transition: { duration: 0.25, ease: 'easeIn' } }}
+                transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                className="bg-brand-surface rounded-xl p-3.5 border border-brand-border flex gap-3"
+              >
+                <img
+                  src={item.menu_item.image_url}
+                  alt={item.menu_item.name}
+                  className="w-16 h-16 rounded-lg object-cover flex-shrink-0"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-start justify-between gap-2">
+                    <h3 className="font-bold text-white text-[14px] leading-snug">{item.menu_item.name}</h3>
+                    <button
+                      onClick={() => removeItem(item.id)}
+                      className="p-1 hover:bg-red-500/10 rounded-lg text-brand-text-dim hover:text-red-400 transition-colors flex-shrink-0"
+                    >
+                      <Trash2 size={14} strokeWidth={2.2} />
+                    </button>
+                  </div>
+
+                  {item.customizations.length > 0 && (
+                    <div className="mt-1 flex items-start gap-1.5">
+                      <div className="flex-1 min-w-0">
+                        <CartCustomizations customizations={item.customizations} />
+                      </div>
+                      {supportsCustomizations && (
+                        <button
+                          onClick={() => setEditingItem({
+                            cartItemId: item.id,
+                            menuItem: item.menu_item,
+                            quantity: item.quantity,
+                            customizations: item.customizations,
+                          })}
+                          className="flex items-center gap-1 text-[11px] font-bold text-brand-gold hover:text-brand-gold-soft transition-colors flex-shrink-0 mt-0.5"
+                        >
+                          <Pencil size={10} />
+                          Edit
+                        </button>
+                      )}
                     </div>
-                    <button
-                      onClick={() => setEditingItem({ cartItemId: item.id, menuItem: item.menu_item })}
-                      className="flex items-center gap-1 text-[11px] font-bold text-brand-gold hover:text-brand-gold-soft transition-colors flex-shrink-0 mt-0.5"
-                    >
-                      <Pencil size={10} />
-                      Edit
-                    </button>
-                  </div>
-                )}
+                  )}
 
-                {item.customizations.length === 0 && (
-                  <button
-                    onClick={() => setEditingItem({ cartItemId: item.id, menuItem: item.menu_item })}
-                    className="flex items-center gap-1 text-[11px] font-bold text-brand-gold hover:text-brand-gold-soft transition-colors mt-1"
-                  >
-                    <Plus size={10} />
-                    Add toppings
-                  </button>
-                )}
+                  {item.customizations.length === 0 && supportsCustomizations && (
+                    <button
+                    onClick={() => setEditingItem({
+                      cartItemId: item.id,
+                      menuItem: item.menu_item,
+                      quantity: item.quantity,
+                      customizations: item.customizations,
+                    })}
+                      className="flex items-center gap-1 text-[11px] font-bold text-brand-gold hover:text-brand-gold-soft transition-colors mt-1"
+                    >
+                      <Plus size={10} />
+                      Add toppings
+                    </button>
+                  )}
 
-                <div className="flex items-center justify-between mt-2">
-                  <div className="flex items-center border border-brand-gold/30 rounded-lg overflow-hidden">
-                    <button
-                      onClick={() => updateQuantity(item.id, item.quantity - 1)}
-                      className="w-7 h-7 flex items-center justify-center text-brand-gold hover:bg-brand-gold/10 transition-colors"
-                    >
-                      <Minus size={12} />
-                    </button>
-                    <span className="w-6 text-center text-[12px] font-bold tabular-nums text-brand-gold">{item.quantity}</span>
-                    <button
-                      onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                      className="w-7 h-7 flex items-center justify-center text-brand-gold hover:bg-brand-gold/10 transition-colors"
-                    >
-                      <Plus size={12} />
-                    </button>
+                  <div className="flex items-center justify-between mt-2">
+                    <div className="flex items-center border border-brand-gold/30 rounded-lg overflow-hidden">
+                      <button
+                        onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                        className="w-7 h-7 flex items-center justify-center text-brand-gold hover:bg-brand-gold/10 transition-colors"
+                      >
+                        <Minus size={12} />
+                      </button>
+                      <span className="w-6 text-center text-[12px] font-bold tabular-nums text-brand-gold">{item.quantity}</span>
+                      <button
+                        onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                        className="w-7 h-7 flex items-center justify-center text-brand-gold hover:bg-brand-gold/10 transition-colors"
+                      >
+                        <Plus size={12} />
+                      </button>
+                    </div>
+                    <span className="font-bold text-brand-gold tabular-nums text-[14px]">{'\u20B9'}{item.total_price.toFixed(0)}</span>
                   </div>
-                  <span className="font-bold text-brand-gold tabular-nums text-[14px]">{'\u20B9'}{item.total_price.toFixed(0)}</span>
                 </div>
-              </div>
-            </motion.div>
-          ))}
+              </motion.div>
+            );
+          })}
           </AnimatePresence>
 
           <Link
@@ -734,6 +770,8 @@ export default function CartPage() {
       {editingItem && (
         <CustomizationModal
           item={editingItem.menuItem}
+          initialQuantity={editingItem.quantity}
+          initialCustomizations={editingItem.customizations}
           onClose={() => setEditingItem(null)}
           onConfirm={handleEditConfirm}
         />

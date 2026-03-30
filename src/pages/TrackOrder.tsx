@@ -258,7 +258,7 @@ export default function TrackOrderPage() {
               type="text"
               value={searchId}
               onChange={(e) => setSearchId(e.target.value.toUpperCase())}
-              placeholder="Enter Order ID (e.g. SW-1234)"
+              placeholder="Enter Order ID (e.g. SW-1)"
               className="input-field pl-10 uppercase"
             />
           </div>

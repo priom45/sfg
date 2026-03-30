@@ -6,26 +6,65 @@ import { supabase } from '../../lib/supabase';
 import { isAwaitingCounterPayment, isAwaitingOnlinePayment } from '../../lib/orderLabels';
 import type { Order } from '../../types';
 
+function startOfToday() {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function startOfWeek() {
+  const date = startOfToday();
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + diff);
+  return date;
+}
+
+function startOfMonth() {
+  const date = startOfToday();
+  date.setDate(1);
+  return date;
+}
+
+function getVisibleOrders(orders: Order[]) {
+  return orders.filter((order) => !isAwaitingOnlinePayment(order));
+}
+
+function getRevenue(orders: Order[]) {
+  return orders
+    .filter((order) => order.status !== 'cancelled' && order.status !== 'expired')
+    .reduce((sum, order) => sum + Number(order.total), 0);
+}
+
 export default function AdminDashboard() {
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [recentOrders, setRecentOrders] = useState<Order[]>([]);
+  const [todayOrders, setTodayOrders] = useState<Order[]>([]);
+  const [weekOrders, setWeekOrders] = useState<Order[]>([]);
+  const [monthOrders, setMonthOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const { showToast } = useToast();
 
   const loadStats = useCallback(async () => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = startOfToday().toISOString();
+    const week = startOfWeek().toISOString();
+    const month = startOfMonth().toISOString();
 
-    const { data, error } = await supabase
-      .from('orders')
-      .select('*')
-      .gte('placed_at', today.toISOString())
-      .order('placed_at', { ascending: false });
+    const [recentRes, todayRes, weekRes, monthRes] = await Promise.all([
+      supabase.from('orders').select('*').order('placed_at', { ascending: false }).limit(50),
+      supabase.from('orders').select('*').gte('placed_at', today).order('placed_at', { ascending: false }),
+      supabase.from('orders').select('*').gte('placed_at', week).order('placed_at', { ascending: false }),
+      supabase.from('orders').select('*').gte('placed_at', month).order('placed_at', { ascending: false }),
+    ]);
 
-    if (error) {
-      showToast(error.message || 'Failed to load dashboard stats', 'error');
+    const firstError = [recentRes.error, todayRes.error, weekRes.error, monthRes.error].find(Boolean);
+    if (firstError) {
+      showToast(firstError.message || 'Failed to load dashboard stats', 'error');
     }
 
-    setOrders(data || []);
+    setRecentOrders(recentRes.data || []);
+    setTodayOrders(todayRes.data || []);
+    setWeekOrders(weekRes.data || []);
+    setMonthOrders(monthRes.data || []);
     setLoading(false);
   }, [showToast]);
 
@@ -33,19 +72,41 @@ export default function AdminDashboard() {
     void loadStats();
   }, [loadStats]);
 
-  const visibleOrders = orders.filter((o) => !isAwaitingOnlinePayment(o));
-  const todayOrders = visibleOrders.length;
-  const pendingOrders = visibleOrders.filter((o) => o.status === 'pending' && !isAwaitingCounterPayment(o)).length;
-  const todayRevenue = visibleOrders
-    .filter((o) => o.status !== 'cancelled' && o.status !== 'expired')
-    .reduce((sum, o) => sum + Number(o.total), 0);
-  const confirmedOrders = visibleOrders.filter((o) => o.status !== 'pending' && o.status !== 'cancelled' && o.status !== 'expired').length;
+  const visibleRecentOrders = getVisibleOrders(recentOrders);
+  const visibleTodayOrders = getVisibleOrders(todayOrders);
+  const visibleWeekOrders = getVisibleOrders(weekOrders);
+  const visibleMonthOrders = getVisibleOrders(monthOrders);
 
-  const stats = [
-    { label: "Today's Orders", value: todayOrders, icon: ShoppingBag, color: 'bg-blue-500/10 text-blue-400' },
-    { label: "Today's Revenue", value: `₹${todayRevenue.toFixed(0)}`, icon: DollarSign, color: 'bg-green-500/10 text-green-400' },
-    { label: 'In Queue', value: pendingOrders, icon: Clock, color: 'bg-orange-500/10 text-orange-400' },
-    { label: 'Confirmed', value: confirmedOrders, icon: TrendingUp, color: 'bg-emerald-500/10 text-emerald-400' },
+  const queueOrders = visibleRecentOrders.filter((order) => order.status === 'pending' && !isAwaitingCounterPayment(order)).length;
+  const activeOrders = visibleRecentOrders.filter((order) => !['cancelled', 'expired', 'delivered'].includes(order.status)).length;
+
+  const periodStats = [
+    {
+      label: 'Today',
+      revenue: getRevenue(visibleTodayOrders),
+      orders: visibleTodayOrders.length,
+      icon: ShoppingBag,
+      color: 'bg-blue-500/10 text-blue-400',
+    },
+    {
+      label: 'This Week',
+      revenue: getRevenue(visibleWeekOrders),
+      orders: visibleWeekOrders.length,
+      icon: TrendingUp,
+      color: 'bg-emerald-500/10 text-emerald-400',
+    },
+    {
+      label: 'This Month',
+      revenue: getRevenue(visibleMonthOrders),
+      orders: visibleMonthOrders.length,
+      icon: DollarSign,
+      color: 'bg-violet-500/10 text-violet-400',
+    },
+  ];
+
+  const quickStats = [
+    { label: 'In Queue', value: queueOrders, icon: Clock, color: 'bg-orange-500/10 text-orange-400' },
+    { label: 'Active Orders', value: activeOrders, icon: TrendingUp, color: 'bg-emerald-500/10 text-emerald-400' },
   ];
 
   function getStatusBadge(order: Order) {
@@ -87,8 +148,8 @@ export default function AdminDashboard() {
     return (
       <div className="space-y-6 animate-pulse">
         <div className="h-8 bg-brand-surface rounded w-40" />
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map((i) => (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {[1, 2, 3].map((i) => (
             <div key={i} className="h-24 bg-brand-surface rounded-xl" />
           ))}
         </div>
@@ -100,8 +161,21 @@ export default function AdminDashboard() {
     <div>
       <h1 className="text-2xl font-extrabold text-white mb-6">Dashboard</h1>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        {stats.map((stat) => (
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+        {periodStats.map((stat) => (
+          <div key={stat.label} className="bg-brand-surface rounded-xl p-4 border border-brand-border">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-3 ${stat.color}`}>
+              <stat.icon size={20} />
+            </div>
+            <p className="text-xs uppercase tracking-[0.18em] text-brand-text-dim">{stat.label}</p>
+            <p className="text-2xl font-extrabold text-white mt-2">₹{stat.revenue.toFixed(0)}</p>
+            <p className="text-sm text-brand-text-muted mt-1">{stat.orders} order{stat.orders !== 1 ? 's' : ''}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 mb-8">
+        {quickStats.map((stat) => (
           <div key={stat.label} className="bg-brand-surface rounded-xl p-4 border border-brand-border">
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-3 ${stat.color}`}>
               <stat.icon size={20} />
@@ -119,9 +193,9 @@ export default function AdminDashboard() {
         </Link>
       </div>
 
-      {visibleOrders.length === 0 ? (
+      {visibleRecentOrders.length === 0 ? (
         <div className="bg-brand-surface rounded-xl border border-brand-border p-10 text-center text-brand-text-muted">
-          No orders today
+          No recent orders
         </div>
       ) : (
         <div className="bg-brand-surface rounded-xl border border-brand-border overflow-hidden">
@@ -137,7 +211,7 @@ export default function AdminDashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-border">
-                {visibleOrders.slice(0, 10).map((order) => (
+                {visibleRecentOrders.slice(0, 10).map((order) => (
                   <tr key={order.id} className="hover:bg-brand-surface-light/70 transition-colors">
                     <td className="px-4 py-3 font-bold text-white">{order.order_id}</td>
                     <td className="px-4 py-3 text-brand-text-muted">{order.customer_name}</td>

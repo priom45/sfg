@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search, SlidersHorizontal, X, Clock, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -11,6 +11,7 @@ import { useCart } from '../contexts/CartContext';
 import { useToast } from '../components/Toast';
 import { playAddToCartSound } from '../lib/sounds';
 import { staggerContainer, staggerChild } from '../lib/animations';
+import { fetchCustomizationAvailability, itemHasAssignedCustomizations, type CustomizationAvailability } from '../lib/customizations';
 import { getOfferBadgeLabel, getOfferRewardLabel, getOfferRuleSummary } from '../lib/offers';
 
 export default function MenuPage() {
@@ -21,18 +22,33 @@ export default function MenuPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState(searchParams.get('category') || 'all');
-  const [vegOnly, setVegOnly] = useState(false);
-  const [egglessOnly, setEgglessOnly] = useState(false);
   const [sortBy, setSortBy] = useState<'popular' | 'price_low' | 'price_high'>('popular');
   const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
+  const [pendingAddOnItem, setPendingAddOnItem] = useState<{ cartItemId: string; menuItem: MenuItem; quantity: number } | null>(null);
+  const [customizationAvailability, setCustomizationAvailability] = useState<CustomizationAvailability | null>(null);
   const [bannerIdx, setBannerIdx] = useState(0);
   const bannerTimer = useRef<ReturnType<typeof setInterval>>();
   const filterBarRef = useRef<HTMLDivElement>(null);
-  const { addItem } = useCart();
+  const { addItem, removeItem } = useCart();
   const { showToast } = useToast();
   const categoryParam = searchParams.get('category') || 'all';
 
-  useEffect(() => { loadData(); }, []);
+  const loadData = useCallback(async () => {
+    const [catRes, itemRes, offerRes, availability] = await Promise.all([
+      supabase.from('categories').select('*').order('display_order'),
+      supabase.from('menu_items').select('*').eq('is_available', true).order('display_order'),
+      supabase.from('offers').select('*').eq('is_active', true).order('created_at', { ascending: false }).limit(4),
+      fetchCustomizationAvailability(),
+    ]);
+    if (catRes.data) setCategories(catRes.data);
+    if (itemRes.data) setItems(itemRes.data);
+    if (offerRes.error) showToast(offerRes.error.message || 'Failed to load offers', 'error');
+    setOffers(offerRes.data || []);
+    setCustomizationAvailability(availability);
+    setLoading(false);
+  }, [showToast]);
+
+  useEffect(() => { void loadData(); }, [loadData]);
 
   useEffect(() => {
     setActiveCategory(categoryParam);
@@ -56,19 +72,6 @@ export default function MenuPage() {
     };
   }, [offers.length]);
 
-  async function loadData() {
-    const [catRes, itemRes, offerRes] = await Promise.all([
-      supabase.from('categories').select('*').order('display_order'),
-      supabase.from('menu_items').select('*').eq('is_available', true).order('display_order'),
-      supabase.from('offers').select('*').eq('is_active', true).order('created_at', { ascending: false }).limit(4),
-    ]);
-    if (catRes.data) setCategories(catRes.data);
-    if (itemRes.data) setItems(itemRes.data);
-    if (offerRes.error) showToast(offerRes.error.message || 'Failed to load offers', 'error');
-    setOffers(offerRes.data || []);
-    setLoading(false);
-  }
-
   const filteredItems = useMemo(() => {
     let result = [...items];
     if (activeCategory !== 'all') {
@@ -79,15 +82,13 @@ export default function MenuPage() {
       const q = search.toLowerCase();
       result = result.filter((i) => i.name.toLowerCase().includes(q) || i.description.toLowerCase().includes(q));
     }
-    if (vegOnly) result = result.filter((i) => i.is_veg);
-    if (egglessOnly) result = result.filter((i) => i.is_eggless);
     switch (sortBy) {
       case 'price_low': result.sort((a, b) => a.price - b.price); break;
       case 'price_high': result.sort((a, b) => b.price - a.price); break;
       default: result.sort((a, b) => b.rating - a.rating);
     }
     return result;
-  }, [items, categories, activeCategory, search, vegOnly, egglessOnly, sortBy]);
+  }, [items, categories, activeCategory, search, sortBy]);
 
   function handleCategoryChange(slug: string) {
     setActiveCategory(slug);
@@ -99,6 +100,35 @@ export default function MenuPage() {
     }
     setSearchParams(nextParams);
   }
+
+  const handleImageClick = useCallback((item: MenuItem) => {
+    setSelectedItem(item);
+  }, []);
+
+  const handleAdd = useCallback((item: MenuItem) => {
+    const supportsCustomizations = itemHasAssignedCustomizations(item, customizationAvailability);
+    const cartItemId = addItem(item, 1, []);
+    playAddToCartSound();
+    showToast(`${item.name} added to cart!`);
+
+    if (!supportsCustomizations) {
+      return;
+    }
+
+    setPendingAddOnItem({ cartItemId, menuItem: item, quantity: 1 });
+  }, [addItem, customizationAvailability, showToast]);
+
+  const handleBaseConfirm = useCallback((item: MenuItem, qty: number) => {
+    const supportsCustomizations = itemHasAssignedCustomizations(item, customizationAvailability);
+    const cartItemId = addItem(item, qty, []);
+    setSelectedItem(null);
+    playAddToCartSound();
+    showToast(`${item.name} added to cart!`);
+    if (!supportsCustomizations) {
+      return;
+    }
+    setPendingAddOnItem({ cartItemId, menuItem: item, quantity: qty });
+  }, [addItem, customizationAvailability, showToast]);
 
   return (
     <div className="min-h-screen bg-brand-bg">
@@ -185,7 +215,7 @@ export default function MenuPage() {
               Waffle Menu
             </h1>
             <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-brand-text-muted sm:text-base">
-              Browse handcrafted waffles, dessert combos, and shakes. Use filters to find bestselling, veg, or eggless options faster.
+              Browse handcrafted waffles, dessert combos, and shakes. Use search and sorting to find your picks faster.
             </p>
           </div>
         </section>
@@ -253,28 +283,8 @@ export default function MenuPage() {
 
       <div className="px-4 py-4">
         <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2.5">
-            <motion.button
-              onClick={() => setVegOnly(!vegOnly)}
-              whileTap={{ scale: 0.93 }}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-bold transition-all ${
-                vegOnly ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-brand-surface text-brand-text-dim border border-brand-border'
-              }`}
-            >
-              <div className="w-3.5 h-3.5 border-2 border-emerald-400 rounded-sm flex items-center justify-center">
-                <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full" />
-              </div>
-              Veg
-            </motion.button>
-            <motion.button
-              onClick={() => setEgglessOnly(!egglessOnly)}
-              whileTap={{ scale: 0.93 }}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-bold transition-all ${
-                egglessOnly ? 'bg-brand-gold/20 text-brand-gold border border-brand-gold/30' : 'bg-brand-surface text-brand-text-dim border border-brand-border'
-              }`}
-            >
-              Eggless
-            </motion.button>
+          <div className="text-[13px] font-semibold text-brand-text-dim">
+            {filteredItems.length} item{filteredItems.length !== 1 ? 's' : ''}
           </div>
           <div className="flex items-center gap-1.5">
             <SlidersHorizontal size={14} className="text-brand-text-dim" strokeWidth={2.5} />
@@ -291,7 +301,7 @@ export default function MenuPage() {
         </div>
 
         {loading ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 items-start">
             {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => <CardSkeleton key={i} />)}
           </div>
         ) : filteredItems.length === 0 ? (
@@ -308,15 +318,15 @@ export default function MenuPage() {
           </motion.div>
         ) : (
           <motion.div
-            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5"
+            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 items-start"
             variants={staggerContainer}
             initial="hidden"
             animate="visible"
-            key={`${activeCategory}-${vegOnly}-${egglessOnly}-${sortBy}`}
+            key={`${activeCategory}-${sortBy}`}
           >
             {filteredItems.map((item) => (
-              <motion.div key={item.id} variants={staggerChild}>
-                <ProductCard item={item} onAdd={setSelectedItem} />
+              <motion.div key={item.id} variants={staggerChild} className="self-start">
+                <ProductCard item={item} onImageClick={handleImageClick} onAdd={handleAdd} />
               </motion.div>
             ))}
           </motion.div>
@@ -328,11 +338,20 @@ export default function MenuPage() {
           <CustomizationModal
             item={selectedItem}
             onClose={() => setSelectedItem(null)}
+            onConfirm={(item, qty) => handleBaseConfirm(item, qty)}
+            showCustomizations={false}
+          />
+        )}
+        {pendingAddOnItem && (
+          <CustomizationModal
+            item={pendingAddOnItem.menuItem}
+            initialQuantity={pendingAddOnItem.quantity}
+            onClose={() => setPendingAddOnItem(null)}
             onConfirm={(item, qty, customizations) => {
+              removeItem(pendingAddOnItem.cartItemId);
               addItem(item, qty, customizations);
-              setSelectedItem(null);
-              playAddToCartSound();
-              showToast(`${item.name} added to cart!`);
+              setPendingAddOnItem(null);
+              showToast(`${item.name} add-ons updated!`);
             }}
           />
         )}

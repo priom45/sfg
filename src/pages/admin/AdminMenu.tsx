@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Pencil, Trash2, Save, X } from 'lucide-react';
 import { useToast } from '../../components/Toast';
+import CustomizationAssignmentsManager from '../../components/admin/CustomizationAssignmentsManager';
 import { supabase } from '../../lib/supabase';
 import type { Category, MenuItem } from '../../types';
 
@@ -17,18 +18,76 @@ interface ItemForm {
   is_available: boolean;
 }
 
+interface CategoryForm {
+  id?: string;
+  name: string;
+  slug: string;
+  image_url: string;
+}
+
 const emptyItem: ItemForm = {
   name: '', description: '', price: '', category_id: '', image_url: '',
   prep_time: '10', is_veg: false, is_eggless: false, is_available: true,
 };
+
+const emptyCategoryForm: CategoryForm = {
+  name: '',
+  slug: '',
+  image_url: '',
+};
+
+function isForeignKeyConstraintError(error: { code?: string; message?: string } | null) {
+  return error?.code === '23503';
+}
+
+function normalizeImageUrl(url: string) {
+  const trimmedUrl = url.trim();
+  const malformedExtensionSuffixMatch = trimmedUrl.match(/^(https?:\/\/\S+\.(?:png|jpe?g|webp|gif|svg))(?:\d+)$/i);
+  return malformedExtensionSuffixMatch?.[1] || trimmedUrl;
+}
+
+function normalizeItemName(name: string) {
+  return name.trim().replace(/\s+/g, ' ');
+}
+
+async function repairMalformedMenuItemImageUrls(items: MenuItem[]) {
+  const corrections = items
+    .map((item) => ({
+      id: item.id,
+      currentImageUrl: item.image_url || '',
+      normalizedImageUrl: normalizeImageUrl(item.image_url || ''),
+    }))
+    .filter((item) => item.currentImageUrl && item.currentImageUrl !== item.normalizedImageUrl);
+
+  if (corrections.length === 0) {
+    return { repairedCount: 0, error: null as string | null };
+  }
+
+  const results = await Promise.all(
+    corrections.map((item) => (
+      supabase
+        .from('menu_items')
+        .update({ image_url: item.normalizedImageUrl })
+        .eq('id', item.id)
+    )),
+  );
+
+  const firstError = results.find((result) => result.error)?.error;
+  return {
+    repairedCount: firstError ? 0 : corrections.length,
+    error: firstError?.message || null,
+  };
+}
 
 export default function AdminMenu() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [items, setItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<ItemForm | null>(null);
-  const [catForm, setCatForm] = useState({ name: '', slug: '', image_url: '' });
+  const [catForm, setCatForm] = useState<CategoryForm>(emptyCategoryForm);
   const [showCatForm, setShowCatForm] = useState(false);
+  const categoryFormRef = useRef<HTMLDivElement | null>(null);
+  const itemFormRef = useRef<HTMLDivElement | null>(null);
   const { showToast } = useToast();
 
   const loadData = useCallback(async () => {
@@ -37,7 +96,20 @@ export default function AdminMenu() {
       supabase.from('menu_items').select('*').order('display_order'),
     ]);
     if (catRes.data) setCategories(catRes.data);
-    if (itemRes.data) setItems(itemRes.data);
+    if (itemRes.data) {
+      const normalizedItems = itemRes.data.map((item) => ({
+        ...item,
+        image_url: normalizeImageUrl(item.image_url || ''),
+      }));
+      setItems(normalizedItems);
+
+      const repairResult = await repairMalformedMenuItemImageUrls(itemRes.data);
+      if (repairResult.error) {
+        showToast(repairResult.error, 'error');
+      } else if (repairResult.repairedCount > 0) {
+        showToast(`Fixed ${repairResult.repairedCount} broken image URL${repairResult.repairedCount > 1 ? 's' : ''}`);
+      }
+    }
     if (catRes.error) {
       showToast(catRes.error.message || 'Failed to load categories', 'error');
     }
@@ -48,6 +120,18 @@ export default function AdminMenu() {
   }, [showToast]);
 
   useEffect(() => { void loadData(); }, [loadData]);
+
+  useEffect(() => {
+    if (!showCatForm) return;
+    categoryFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [showCatForm]);
+
+  useEffect(() => {
+    if (!editing) return;
+    itemFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [editing]);
+
+  const visibleItems = items.filter((item) => item.is_available);
 
   async function saveItem() {
     if (!editing) return;
@@ -63,15 +147,18 @@ export default function AdminMenu() {
     }
 
     const payload = {
-      name: editing.name,
+      name: normalizeItemName(editing.name),
       description: editing.description,
       price: parseFloat(editing.price) || 0,
       category_id: editing.category_id,
-      image_url: editing.image_url,
+      image_url: normalizeImageUrl(editing.image_url),
       prep_time: parseInt(editing.prep_time) || 10,
       is_veg: editing.is_veg,
       is_eggless: editing.is_eggless,
       is_available: editing.is_available,
+      display_order: editing.id
+        ? undefined
+        : items.reduce((maxOrder, item) => Math.max(maxOrder, item.display_order), -1) + 1,
     };
 
     const actionLabel = editing.id ? 'update' : 'add';
@@ -94,7 +181,29 @@ export default function AdminMenu() {
   }
 
   async function deleteItem(id: string) {
+    const currentItem = items.find((item) => item.id === id);
     const { error } = await supabase.from('menu_items').delete().eq('id', id);
+
+    if (isForeignKeyConstraintError(error)) {
+      const { error: archiveError } = await supabase
+        .from('menu_items')
+        .update({ is_available: false })
+        .eq('id', id);
+
+      if (archiveError) {
+        showToast(archiveError.message || 'Failed to archive item', 'error');
+        return;
+      }
+
+      showToast(
+        currentItem?.is_available === false
+          ? 'This item is already removed from the menu'
+          : 'This item exists in past orders, so it was removed from the menu',
+      );
+      await loadData();
+      return;
+    }
+
     if (error) {
       showToast(error.message || 'Failed to delete item', 'error');
       return;
@@ -109,25 +218,55 @@ export default function AdminMenu() {
       return;
     }
     const slug = catForm.slug || catForm.name.toLowerCase().replace(/\s+/g, '-');
-    const { error } = await supabase.from('categories').insert({
-      name: catForm.name,
+    const payload = {
+      name: catForm.name.trim(),
       slug,
-      image_url: catForm.image_url,
-      display_order: categories.length,
-    });
+      image_url: normalizeImageUrl(catForm.image_url),
+    };
+    const { error } = catForm.id
+      ? await supabase.from('categories').update(payload).eq('id', catForm.id)
+      : await supabase.from('categories').insert({
+        ...payload,
+        display_order: categories.length,
+      });
 
     if (error) {
-      showToast(error.message || 'Failed to add category', 'error');
+      showToast(error.message || `Failed to ${catForm.id ? 'update' : 'add'} category`, 'error');
       return;
     }
 
-    setCatForm({ name: '', slug: '', image_url: '' });
+    setCatForm(emptyCategoryForm);
     setShowCatForm(false);
-    showToast('Category added');
+    showToast(catForm.id ? 'Category updated' : 'Category added');
     await loadData();
   }
 
+  function startCategoryEdit(category: Category) {
+    setCatForm({
+      id: category.id,
+      name: category.name,
+      slug: category.slug,
+      image_url: category.image_url,
+    });
+    setShowCatForm(true);
+  }
+
   async function deleteCategory(id: string) {
+    const { count, error: linkedItemsError } = await supabase
+      .from('menu_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('category_id', id);
+
+    if (linkedItemsError) {
+      showToast(linkedItemsError.message || 'Failed to check category items', 'error');
+      return;
+    }
+
+    if ((count || 0) > 0) {
+      showToast('This category still has menu items. Move or archive those items first.', 'error');
+      return;
+    }
+
     const { error } = await supabase.from('categories').delete().eq('id', id);
     if (error) {
       showToast(error.message || 'Failed to delete category', 'error');
@@ -148,18 +287,33 @@ export default function AdminMenu() {
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold text-white">Categories</h2>
-          <button onClick={() => setShowCatForm(true)} className="flex items-center gap-1 text-sm text-brand-gold font-semibold">
+          <button
+            onClick={() => {
+              setCatForm(emptyCategoryForm);
+              setShowCatForm(true);
+            }}
+            className="flex items-center gap-1 text-sm text-brand-gold font-semibold"
+          >
             <Plus size={16} /> Add Category
           </button>
         </div>
 
         {showCatForm && (
-          <div className="bg-brand-surface rounded-xl border border-brand-border p-4 mb-4 space-y-3">
+          <div ref={categoryFormRef} className="bg-brand-surface rounded-xl border border-brand-border p-4 mb-4 space-y-3">
+            <h3 className="text-sm font-bold text-white">{catForm.id ? 'Edit Category' : 'Add Category'}</h3>
             <input placeholder="Category Name" value={catForm.name} onChange={(e) => setCatForm({ ...catForm, name: e.target.value })} className="input-field" />
             <input placeholder="Image URL" value={catForm.image_url} onChange={(e) => setCatForm({ ...catForm, image_url: e.target.value })} className="input-field" />
             <div className="flex gap-2">
-              <button onClick={saveCategory} className="btn-primary text-sm px-4 py-2 flex items-center gap-1"><Save size={14} />Save</button>
-              <button onClick={() => setShowCatForm(false)} className="btn-outline text-sm px-4 py-2">Cancel</button>
+              <button onClick={saveCategory} className="btn-primary text-sm px-4 py-2 flex items-center gap-1"><Save size={14} />{catForm.id ? 'Update' : 'Save'}</button>
+              <button
+                onClick={() => {
+                  setCatForm(emptyCategoryForm);
+                  setShowCatForm(false);
+                }}
+                className="btn-outline text-sm px-4 py-2"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         )}
@@ -168,6 +322,7 @@ export default function AdminMenu() {
           {categories.map((cat) => (
             <div key={cat.id} className="flex items-center gap-2 bg-brand-surface border border-brand-border rounded-lg px-3 py-2 text-sm">
               <span className="font-medium text-white">{cat.name}</span>
+              <button onClick={() => startCategoryEdit(cat)} className="text-brand-text-dim hover:text-white"><Pencil size={14} /></button>
               <button onClick={() => deleteCategory(cat.id)} className="text-brand-text-dim hover:text-red-400"><Trash2 size={14} /></button>
             </div>
           ))}
@@ -178,7 +333,13 @@ export default function AdminMenu() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold text-white">Menu Items</h2>
           <button
-            onClick={() => setEditing({ ...emptyItem, category_id: categories[0]?.id || '' })}
+            onClick={() => {
+              if (categories.length === 0) {
+                showToast('Add a category before creating a menu item', 'error');
+                return;
+              }
+              setEditing({ ...emptyItem, category_id: categories[0]?.id || '' });
+            }}
             className="flex items-center gap-1 text-sm text-brand-gold font-semibold"
           >
             <Plus size={16} /> Add Item
@@ -186,7 +347,7 @@ export default function AdminMenu() {
         </div>
 
         {editing && (
-          <div className="bg-brand-surface rounded-xl border border-brand-border p-4 mb-4 space-y-3">
+          <div ref={itemFormRef} className="bg-brand-surface rounded-xl border border-brand-border p-4 mb-4 space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <input placeholder="Item Name" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} className="input-field" />
               <select value={editing.category_id} onChange={(e) => setEditing({ ...editing, category_id: e.target.value })} className="input-field">
@@ -197,20 +358,9 @@ export default function AdminMenu() {
             </div>
             <input placeholder="Image URL" value={editing.image_url} onChange={(e) => setEditing({ ...editing, image_url: e.target.value })} className="input-field" />
             <textarea placeholder="Description" value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} className="input-field resize-none" rows={2} />
-            <div className="flex flex-wrap gap-4">
-              <label className="flex items-center gap-2 text-sm text-brand-text-muted">
-                <input type="checkbox" checked={editing.is_veg} onChange={(e) => setEditing({ ...editing, is_veg: e.target.checked })} className="rounded" />
-                Vegetarian
-              </label>
-              <label className="flex items-center gap-2 text-sm text-brand-text-muted">
-                <input type="checkbox" checked={editing.is_eggless} onChange={(e) => setEditing({ ...editing, is_eggless: e.target.checked })} className="rounded" />
-                Eggless
-              </label>
-              <label className="flex items-center gap-2 text-sm text-brand-text-muted">
-                <input type="checkbox" checked={editing.is_available} onChange={(e) => setEditing({ ...editing, is_available: e.target.checked })} className="rounded" />
-                Available
-              </label>
-            </div>
+            <p className="text-sm text-brand-text-muted">
+              Add-ons are assigned from the Add-On Management section below.
+            </p>
             <div className="flex gap-2">
               <button onClick={saveItem} className="btn-primary text-sm px-4 py-2 flex items-center gap-1"><Save size={14} />{editing.id ? 'Update' : 'Add'}</button>
               <button onClick={() => setEditing(null)} className="btn-outline text-sm px-4 py-2 flex items-center gap-1"><X size={14} />Cancel</button>
@@ -218,24 +368,35 @@ export default function AdminMenu() {
           </div>
         )}
 
+        {visibleItems.length === 0 ? (
+          <div className="bg-brand-surface rounded-xl border border-brand-border p-10 text-center text-brand-text-muted">
+            No menu items to show
+          </div>
+        ) : (
         <div className="space-y-2">
-          {items.map((item) => (
+          {visibleItems.map((item) => (
             <div key={item.id} className="bg-brand-surface rounded-xl border border-brand-border p-3 flex items-center gap-4">
-              <img src={item.image_url} alt={item.name} className="w-14 h-14 rounded-lg object-cover flex-shrink-0" />
+              <img
+                src={item.image_url || '/image.png'}
+                alt={item.name}
+                onError={(event) => {
+                  if (event.currentTarget.src.endsWith('/image.png')) return;
+                  event.currentTarget.src = '/image.png';
+                }}
+                className="w-14 h-14 rounded-lg object-cover flex-shrink-0"
+              />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <h3 className="font-bold text-sm truncate text-white">{item.name}</h3>
-                  {item.is_veg && <span className="badge-veg text-[10px]">VEG</span>}
-                  {!item.is_available && <span className="text-[10px] bg-brand-surface-light text-brand-text-dim px-1.5 py-0.5 rounded">Unavailable</span>}
                 </div>
                 <p className="text-xs text-brand-text-muted">₹{item.price} &bull; {item.prep_time} min</p>
               </div>
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => setEditing({
-                    id: item.id, name: item.name, description: item.description,
+                    id: item.id, name: normalizeItemName(item.name), description: item.description,
                     price: String(item.price), category_id: item.category_id,
-                    image_url: item.image_url, prep_time: String(item.prep_time),
+                    image_url: normalizeImageUrl(item.image_url), prep_time: String(item.prep_time),
                     is_veg: item.is_veg, is_eggless: item.is_eggless, is_available: item.is_available,
                   })}
                   className="p-2 hover:bg-brand-surface-light/70 rounded-lg text-brand-text-dim hover:text-white transition-colors"
@@ -249,7 +410,10 @@ export default function AdminMenu() {
             </div>
           ))}
         </div>
+        )}
       </div>
+
+      <CustomizationAssignmentsManager />
     </div>
   );
 }

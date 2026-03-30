@@ -3,7 +3,7 @@ const shimmerClass = 'bg-gradient-to-r from-brand-surface-light/50 via-brand-sur
 export function CardSkeleton() {
   return (
     <div className="card overflow-hidden">
-      <div className={`aspect-square ${shimmerClass}`} />
+      <div className={`aspect-[5/6] ${shimmerClass}`} />
       <div className="p-3 space-y-2.5">
         <div className={`h-4 rounded w-3/4 ${shimmerClass}`} />
         <div className={`h-3 rounded w-1/2 ${shimmerClass}`} />

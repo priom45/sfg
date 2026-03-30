@@ -10,6 +10,7 @@ import ProductCard from '../components/ProductCard';
 import CustomizationModal from '../components/CustomizationModal';
 import ScrollReveal from '../components/ScrollReveal';
 import { staggerContainer, staggerChild } from '../lib/animations';
+import { fetchCustomizationAvailability, itemHasAssignedCustomizations, type CustomizationAvailability } from '../lib/customizations';
 import type { Category, MenuItem, Offer } from '../types';
 
 export default function Home() {
@@ -19,22 +20,26 @@ export default function Home() {
   const [offers, setOffers] = useState<Offer[]>([]);
   const [bannerIdx, setBannerIdx] = useState(0);
   const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
+  const [pendingAddOnItem, setPendingAddOnItem] = useState<{ cartItemId: string; menuItem: MenuItem; quantity: number } | null>(null);
+  const [customizationAvailability, setCustomizationAvailability] = useState<CustomizationAvailability | null>(null);
   const bannerTimer = useRef<ReturnType<typeof setInterval>>();
-  const { addItem } = useCart();
+  const { addItem, removeItem } = useCart();
   const { showToast } = useToast();
 
   const loadData = useCallback(async () => {
-    const [catRes, bestRes, allRes, offerRes] = await Promise.all([
+    const [catRes, bestRes, allRes, offerRes, availability] = await Promise.all([
       supabase.from('categories').select('*').order('display_order'),
       supabase.from('menu_items').select('*').eq('is_available', true).order('rating', { ascending: false }).limit(10),
       supabase.from('menu_items').select('*').eq('is_available', true).order('display_order'),
       supabase.from('offers').select('*').eq('is_active', true).order('created_at', { ascending: false }).limit(4),
+      fetchCustomizationAvailability(),
     ]);
     if (catRes.data) setCategories(catRes.data);
     if (bestRes.data) setBestSellers(bestRes.data);
     if (allRes.data) setAllItems(allRes.data);
     if (offerRes.error) showToast(offerRes.error.message || 'Failed to load offers', 'error');
     setOffers(offerRes.data || []);
+    setCustomizationAvailability(availability);
   }, [showToast]);
 
   useEffect(() => { void loadData(); }, [loadData]);
@@ -57,15 +62,32 @@ export default function Home() {
     };
   }, [offers.length]);
 
-  const handleAdd = useCallback((item: MenuItem) => {
+  const handleImageClick = useCallback((item: MenuItem) => {
     setSelectedItem(item);
   }, []);
 
-  const handleConfirmAdd = useCallback((item: MenuItem, qty: number, custs: { group_name: string; option_name: string; price: number }[]) => {
-    addItem(item, qty, custs);
+  const handleAdd = useCallback((item: MenuItem) => {
+    const supportsCustomizations = itemHasAssignedCustomizations(item, customizationAvailability);
+    const cartItemId = addItem(item, 1, []);
+    showToast(`${item.name} added to cart`);
+
+    if (!supportsCustomizations) {
+      return;
+    }
+
+    setPendingAddOnItem({ cartItemId, menuItem: item, quantity: 1 });
+  }, [addItem, customizationAvailability, showToast]);
+
+  const handleConfirmAdd = useCallback((item: MenuItem, qty: number) => {
+    const supportsCustomizations = itemHasAssignedCustomizations(item, customizationAvailability);
+    const cartItemId = addItem(item, qty, []);
     showToast(`${item.name} added to cart`);
     setSelectedItem(null);
-  }, [addItem, showToast]);
+    if (!supportsCustomizations) {
+      return;
+    }
+    setPendingAddOnItem({ cartItemId, menuItem: item, quantity: qty });
+  }, [addItem, customizationAvailability, showToast]);
 
   const itemsByCategory = categories.map((cat) => ({
     category: cat,
@@ -184,7 +206,7 @@ export default function Home() {
                 <motion.div key={cat.id} variants={staggerChild}>
                   <Link
                     to={`/menu?category=${cat.slug}`}
-                    className="flex flex-col items-center gap-1.5 flex-shrink-0 group"
+                    className="flex w-[84px] flex-shrink-0 flex-col items-center gap-1.5 group"
                   >
                     <div className="w-[68px] h-[68px] rounded-full overflow-hidden border-2 border-brand-border group-hover:border-brand-gold/50 transition-all">
                       <img
@@ -195,7 +217,14 @@ export default function Home() {
                         className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
                       />
                     </div>
-                    <span className="text-[12px] font-bold text-brand-text-muted group-hover:text-brand-gold transition-colors text-center max-w-[72px] truncate">
+                    <span
+                      className="min-h-[2rem] overflow-hidden break-words text-center text-[12px] font-bold leading-tight text-brand-text-muted transition-colors group-hover:text-brand-gold"
+                      style={{
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                      }}
+                    >
                       {cat.name}
                     </span>
                   </Link>
@@ -212,6 +241,7 @@ export default function Home() {
             icon={<Flame size={18} className="text-orange-400" strokeWidth={2.5} />}
             title="Best Sellers"
             items={bestSellers}
+            onImageClick={handleImageClick}
             onAdd={handleAdd}
             linkTo="/menu"
           />
@@ -223,6 +253,7 @@ export default function Home() {
           <HorizontalRail
             title={group.category.name}
             items={group.items}
+            onImageClick={handleImageClick}
             onAdd={handleAdd}
             linkTo={`/menu?category=${group.category.slug}`}
           />
@@ -234,7 +265,21 @@ export default function Home() {
           <CustomizationModal
             item={selectedItem}
             onClose={() => setSelectedItem(null)}
-            onConfirm={handleConfirmAdd}
+            onConfirm={(item, qty) => handleConfirmAdd(item, qty)}
+            showCustomizations={false}
+          />
+        )}
+        {pendingAddOnItem && (
+          <CustomizationModal
+            item={pendingAddOnItem.menuItem}
+            initialQuantity={pendingAddOnItem.quantity}
+            onClose={() => setPendingAddOnItem(null)}
+            onConfirm={(item, qty, customizations) => {
+              removeItem(pendingAddOnItem.cartItemId);
+              addItem(item, qty, customizations);
+              setPendingAddOnItem(null);
+              showToast(`${item.name} add-ons updated`);
+            }}
           />
         )}
       </AnimatePresence>
@@ -246,12 +291,14 @@ function HorizontalRail({
   icon,
   title,
   items,
+  onImageClick,
   onAdd,
   linkTo,
 }: {
   icon?: React.ReactNode;
   title: string;
   items: MenuItem[];
+  onImageClick: (item: MenuItem) => void;
   onAdd: (item: MenuItem) => void;
   linkTo: string;
 }) {
@@ -295,11 +342,11 @@ function HorizontalRail({
       <div className="relative group/rail">
         <div
           ref={scrollRef}
-          className="flex gap-2.5 overflow-x-auto scrollbar-hide px-4 snap-x snap-mandatory"
+          className="flex gap-3 overflow-x-auto scrollbar-hide px-4 snap-x snap-mandatory"
         >
           {items.map((item) => (
-            <div key={item.id} className="w-[44vw] sm:w-44 flex-shrink-0 snap-start">
-              <ProductCard item={item} onAdd={onAdd} />
+            <div key={item.id} className="w-[44vw] min-w-[176px] sm:w-48 lg:w-52 flex-shrink-0 snap-start">
+              <ProductCard item={item} onImageClick={onImageClick} onAdd={onAdd} />
             </div>
           ))}
         </div>
