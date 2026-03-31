@@ -132,9 +132,9 @@ export default function Home() {
                       className="absolute inset-0 h-full w-full object-cover object-center"
                       onError={() => markImageFailed(activeBannerBackgroundImage)}
                     />
-                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(216,178,78,0.16),_transparent_30%),radial-gradient(circle_at_bottom_right,_rgba(255,255,255,0.08),_transparent_24%)]" />
-                    <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(10,14,8,0.82)_0%,rgba(10,14,8,0.68)_26%,rgba(10,14,8,0.34)_54%,rgba(10,14,8,0.18)_100%)]" />
-                    <div className="absolute inset-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),inset_0_-32px_60px_rgba(0,0,0,0.18)]" />
+                    <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(8,11,7,0.96)_0%,rgba(8,11,7,0.84)_20%,rgba(8,11,7,0.54)_42%,rgba(8,11,7,0.2)_68%,rgba(8,11,7,0.08)_100%)]" />
+                    <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(8,11,7,0.12)_0%,rgba(8,11,7,0.04)_42%,rgba(8,11,7,0.28)_100%)]" />
+                    <div className="absolute inset-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),inset_0_-40px_72px_rgba(0,0,0,0.2)]" />
                   </>
                 )}
                 {!activeBannerBackgroundImage && (
@@ -143,17 +143,13 @@ export default function Home() {
                     <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(216,178,78,0.18),_transparent_34%),radial-gradient(circle_at_75%_18%,_rgba(255,255,255,0.05),_transparent_22%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_45%)]" />
                   </>
                 )}
-                <div className="relative flex h-full items-end px-5 py-5 sm:px-7 sm:py-6 lg:py-7">
-                  <div className={`rounded-[22px] border px-5 py-5 shadow-[0_24px_60px_rgba(0,0,0,0.22)] ${
-                    activeBannerBackgroundImage
-                      ? 'max-w-[320px] border-white/10 bg-[#10170d]/58 backdrop-blur-md sm:max-w-[360px] lg:max-w-[390px]'
-                      : 'max-w-xl border-brand-border bg-brand-surface/45'
-                  }`}>
+                <div className="relative flex h-full items-center px-5 py-5 sm:px-7 sm:py-6 lg:px-10 lg:py-7">
+                  <div className={activeBannerBackgroundImage ? 'max-w-[280px] sm:max-w-[340px] lg:max-w-[410px]' : 'max-w-xl'}>
                     <motion.span
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.1, duration: 0.35 }}
-                      className="inline-block bg-brand-gold/20 text-brand-gold text-[12px] font-bold px-2.5 py-1 rounded-md mb-1.5 tracking-wide"
+                      className="mb-2 inline-block rounded-md border border-brand-gold/15 bg-brand-gold/18 px-2.5 py-1 text-[12px] font-bold tracking-wide text-brand-gold"
                     >
                       {getOfferBadgeLabel(activeBannerOffer)}
                     </motion.span>
@@ -161,7 +157,7 @@ export default function Home() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.15, duration: 0.4 }}
-                      className="mb-1 text-[22px] font-extrabold leading-tight text-white sm:text-[28px]"
+                      className="mb-1.5 text-[24px] font-extrabold leading-[1.02] text-white drop-shadow-[0_4px_18px_rgba(0,0,0,0.28)] sm:text-[30px] lg:text-[34px]"
                     >
                       {activeBannerOffer.title}
                     </motion.h3>
@@ -170,7 +166,7 @@ export default function Home() {
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.2, duration: 0.4 }}
-                        className="mb-3 whitespace-pre-line text-[13px] font-medium leading-snug text-brand-text-muted sm:text-[14px]"
+                        className="mb-3 whitespace-pre-line text-[13px] font-medium leading-snug text-white/84 drop-shadow-[0_3px_10px_rgba(0,0,0,0.24)] sm:text-[14px] lg:text-[15px]"
                       >
                         {activeBannerDescription}
                       </motion.p>
@@ -180,7 +176,7 @@ export default function Home() {
                         initial={{ opacity: 0, scale: 0.9 }}
                         animate={{ opacity: 1, scale: 1 }}
                         transition={{ delay: 0.25, duration: 0.35 }}
-                        className="text-brand-gold font-black text-[22px] tracking-tight inline-block"
+                        className="inline-block text-[24px] font-black tracking-tight text-brand-gold drop-shadow-[0_4px_14px_rgba(0,0,0,0.26)] lg:text-[28px]"
                       >
                         {activeBannerReward}
                       </motion.span>
@@ -193,7 +189,7 @@ export default function Home() {
                     >
                       <Link
                         to="/menu"
-                        className="inline-flex w-fit items-center gap-1.5 rounded-lg bg-brand-gold px-5 py-2.5 text-[14px] font-bold text-brand-bg transition-all hover:brightness-110"
+                        className="inline-flex w-fit items-center gap-1.5 rounded-xl bg-brand-gold px-5 py-2.5 text-[14px] font-bold text-brand-bg shadow-[0_14px_30px_rgba(216,178,78,0.18)] transition-all hover:-translate-y-0.5 hover:brightness-110"
                       >
                         Order Now
                       </Link>
