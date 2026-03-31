@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Pencil, Plus, Save, Trash2, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ImagePlus, Pencil, Plus, Save, Trash2, X } from 'lucide-react';
 import { useToast } from '../../components/Toast';
 import {
   getOfferBadgeLabel,
@@ -33,6 +33,101 @@ interface OfferForm {
   is_active: boolean;
 }
 
+const DISPLAY_SCHEMA_SQL = `ALTER TABLE offers
+  ADD COLUMN IF NOT EXISTS display_badge text,
+  ADD COLUMN IF NOT EXISTS display_reward text,
+  ADD COLUMN IF NOT EXISTS is_cart_eligible boolean NOT NULL DEFAULT true;
+
+UPDATE offers
+SET is_cart_eligible = true
+WHERE is_cart_eligible IS NULL;
+
+ALTER TABLE offers
+  ADD COLUMN IF NOT EXISTS background_image_url text;`;
+
+const RULES_SCHEMA_SQL = `ALTER TABLE offers
+  ADD COLUMN IF NOT EXISTS offer_mode text NOT NULL DEFAULT 'coupon',
+  ADD COLUMN IF NOT EXISTS trigger_type text NOT NULL DEFAULT 'min_order',
+  ADD COLUMN IF NOT EXISTS required_item_quantity integer;`;
+
+const OFFER_IMAGE_BUCKET = 'offer-images';
+const MAX_OFFER_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+const ACCEPTED_OFFER_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+const OFFER_IMAGE_STORAGE_SQL = `INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'offer-images',
+  'offer-images',
+  true,
+  5242880,
+  ARRAY['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+)
+ON CONFLICT (id) DO UPDATE
+SET
+  public = EXCLUDED.public,
+  file_size_limit = EXCLUDED.file_size_limit,
+  allowed_mime_types = EXCLUDED.allowed_mime_types;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = 'storage'
+      AND tablename = 'objects'
+      AND policyname = 'Public can view offer images'
+  ) THEN
+    CREATE POLICY "Public can view offer images"
+      ON storage.objects FOR SELECT TO public
+      USING (bucket_id = 'offer-images');
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = 'storage'
+      AND tablename = 'objects'
+      AND policyname = 'Admins can upload offer images'
+  ) THEN
+    CREATE POLICY "Admins can upload offer images"
+      ON storage.objects FOR INSERT TO authenticated
+      WITH CHECK (bucket_id = 'offer-images' AND public.is_admin());
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = 'storage'
+      AND tablename = 'objects'
+      AND policyname = 'Admins can update offer images'
+  ) THEN
+    CREATE POLICY "Admins can update offer images"
+      ON storage.objects FOR UPDATE TO authenticated
+      USING (bucket_id = 'offer-images' AND public.is_admin())
+      WITH CHECK (bucket_id = 'offer-images' AND public.is_admin());
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = 'storage'
+      AND tablename = 'objects'
+      AND policyname = 'Admins can delete offer images'
+  ) THEN
+    CREATE POLICY "Admins can delete offer images"
+      ON storage.objects FOR DELETE TO authenticated
+      USING (bucket_id = 'offer-images' AND public.is_admin());
+  END IF;
+END $$;`;
+
 function toDateTimeLocalValue(value: string) {
   const date = new Date(value);
   const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
@@ -46,6 +141,19 @@ function toIsoDateTime(value: string) {
 function normalizeImageUrl(value: string | null | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function sanitizeFileName(fileName: string) {
+  const trimmed = fileName.trim().toLowerCase();
+  const sanitized = trimmed.replace(/[^a-z0-9._-]+/g, '-').replace(/-+/g, '-');
+  return sanitized || 'offer-image';
+}
+
+function isMissingOfferImageStorage(error: { message?: string } | null) {
+  return Boolean(
+    error?.message
+    && /(bucket.*not found|resource was not found|storage.*not found|row-level security|permission denied|Unauthorized)/i.test(error.message),
+  );
 }
 
 function buildEmptyOffer(): OfferForm {
@@ -155,6 +263,9 @@ export default function AdminOffers() {
   const [failedImageUrls, setFailedImageUrls] = useState<Record<string, true>>({});
   const [displaySchemaAvailable, setDisplaySchemaAvailable] = useState<boolean | null>(null);
   const [rulesSchemaAvailable, setRulesSchemaAvailable] = useState<boolean | null>(null);
+  const [offerImageUploadAvailable, setOfferImageUploadAvailable] = useState<boolean | null>(null);
+  const [uploadingBackgroundImage, setUploadingBackgroundImage] = useState(false);
+  const backgroundImageInputRef = useRef<HTMLInputElement | null>(null);
   const { showToast } = useToast();
   const activeOffers = offers.filter((offer) => offer.is_active);
   const carouselOffers = activeOffers.slice(0, 4);
@@ -165,15 +276,89 @@ export default function AdminOffers() {
     setFailedImageUrls((current) => (current[url] ? current : { ...current, [url]: true }));
   }, []);
 
+  const uploadOfferBackgroundImage = useCallback(async (file: File) => {
+    if (!editing) {
+      return;
+    }
+
+    if (displaySchemaAvailable === false) {
+      showToast(
+        'Run migrations 20260330120000 and 20260330123000 before saving background images, custom labels, or display-only promos.',
+        'error',
+      );
+      return;
+    }
+
+    if (!ACCEPTED_OFFER_IMAGE_TYPES.includes(file.type)) {
+      showToast('Use a PNG, JPG, WEBP, or GIF image', 'error');
+      return;
+    }
+
+    if (file.size > MAX_OFFER_IMAGE_SIZE_BYTES) {
+      showToast('Offer background images must be 5 MB or smaller', 'error');
+      return;
+    }
+
+    setUploadingBackgroundImage(true);
+
+    const filePath = `backgrounds/${editing.id || 'draft'}/${Date.now()}-${crypto.randomUUID()}-${sanitizeFileName(file.name)}`;
+    const { error } = await supabase.storage.from(OFFER_IMAGE_BUCKET).upload(filePath, file, {
+      cacheControl: '3600',
+      upsert: false,
+      contentType: file.type,
+    });
+
+    if (error) {
+      if (isMissingOfferImageStorage(error)) {
+        setOfferImageUploadAvailable(false);
+        showToast(
+          'Offer image uploads are not ready. Run the offer-images storage migration in Supabase first.',
+          'error',
+        );
+      } else {
+        showToast(error.message || 'Failed to upload background image', 'error');
+      }
+      setUploadingBackgroundImage(false);
+      return;
+    }
+
+    const { data } = supabase.storage.from(OFFER_IMAGE_BUCKET).getPublicUrl(filePath);
+    const nextUrl = data.publicUrl;
+
+    setEditing((current) => (current ? { ...current, background_image_url: nextUrl } : current));
+    setOfferImageUploadAvailable(true);
+    setFailedImageUrls((current) => {
+      if (!current[nextUrl]) return current;
+      const next = { ...current };
+      delete next[nextUrl];
+      return next;
+    });
+    setUploadingBackgroundImage(false);
+    showToast('Background image uploaded');
+  }, [displaySchemaAvailable, editing, showToast]);
+
+  const handleBackgroundImageFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+
+    if (!file) {
+      return;
+    }
+
+    void uploadOfferBackgroundImage(file);
+  }, [uploadOfferBackgroundImage]);
+
   const loadOffers = useCallback(async () => {
     const { data, error } = await supabase
       .from('offers')
       .select('*')
       .order('is_active', { ascending: false })
       .order('created_at', { ascending: false });
+
     if (error) {
       showToast(error.message || 'Failed to load offers', 'error');
     }
+
     const loadedOffers = data || [];
     setOffers(loadedOffers);
 
@@ -187,6 +372,9 @@ export default function AdminOffers() {
         ['offer_mode', 'trigger_type', 'required_item_quantity']
           .every((column) => Object.prototype.hasOwnProperty.call(sampleOffer, column)),
       );
+    } else {
+      setDisplaySchemaAvailable(null);
+      setRulesSchemaAvailable(null);
     }
 
     setLoading(false);
@@ -259,7 +447,17 @@ export default function AdminOffers() {
       is_cart_eligible: editing.is_cart_eligible,
     };
 
-    const savePayload = (payload: typeof legacyPayload | typeof rulesPayload | typeof displayPayload) => (
+    const legacyDisplayPayload = {
+      ...legacyPayload,
+      display_badge: editing.display_badge.trim() || null,
+      display_reward: editing.display_reward.trim() || null,
+      background_image_url: editing.background_image_url.trim() || null,
+      is_cart_eligible: editing.is_cart_eligible,
+    };
+
+    const savePayload = (
+      payload: typeof legacyPayload | typeof rulesPayload | typeof displayPayload | typeof legacyDisplayPayload,
+    ) => (
       editing.id
         ? supabase.from('offers').update(payload).eq('id', editing.id)
         : supabase.from('offers').insert(payload)
@@ -323,7 +521,25 @@ export default function AdminOffers() {
       }
 
       usedLegacyRulesFallback = true;
-      ({ error } = await savePayload(legacyPayload));
+      ({ error } = await savePayload(
+        displaySchemaAvailable === false || usedLegacyDisplayFallback
+          ? legacyPayload
+          : legacyDisplayPayload,
+      ));
+
+      if (error && isMissingOfferDisplaySchema(error)) {
+        setDisplaySchemaAvailable(false);
+        if (requiresDisplaySchema || !canUseLegacyOfferDisplaySchema(editing)) {
+          showToast(
+            'Run migrations 20260330120000 and 20260330123000 before saving background images, custom labels, or display-only promos.',
+            'error',
+          );
+          return;
+        }
+
+        usedLegacyDisplayFallback = true;
+        ({ error } = await savePayload(legacyPayload));
+      }
     }
 
     if (error) {
@@ -450,6 +666,42 @@ export default function AdminOffers() {
         </div>
       </div>
 
+      {displaySchemaAvailable === false && (
+        <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+          <p className="text-sm font-semibold text-white">
+            Background image URLs and custom offer labels are disabled because the `offers` table is missing the new display columns.
+          </p>
+          <p className="mt-1 text-xs text-brand-text-muted">
+            Run this SQL once in the Supabase SQL Editor for the current project, then refresh this page.
+          </p>
+          <pre className="mt-3 overflow-x-auto rounded-lg bg-brand-bg/70 p-3 text-xs text-brand-text-muted">{DISPLAY_SCHEMA_SQL}</pre>
+        </div>
+      )}
+
+      {rulesSchemaAvailable === false && (
+        <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+          <p className="text-sm font-semibold text-white">
+            Advanced automatic and quantity-based offers are disabled because the `offers` table is missing the rule-based columns.
+          </p>
+          <p className="mt-1 text-xs text-brand-text-muted">
+            Run this SQL once in the Supabase SQL Editor for the current project, then refresh this page.
+          </p>
+          <pre className="mt-3 overflow-x-auto rounded-lg bg-brand-bg/70 p-3 text-xs text-brand-text-muted">{RULES_SCHEMA_SQL}</pre>
+        </div>
+      )}
+
+      {offerImageUploadAvailable === false && (
+        <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+          <p className="text-sm font-semibold text-white">
+            Offer image uploads are disabled because the `offer-images` storage bucket or its admin policies are missing.
+          </p>
+          <p className="mt-1 text-xs text-brand-text-muted">
+            Run this SQL once in the Supabase SQL Editor for the current project, then retry the upload.
+          </p>
+          <pre className="mt-3 overflow-x-auto rounded-lg bg-brand-bg/70 p-3 text-xs text-brand-text-muted">{OFFER_IMAGE_STORAGE_SQL}</pre>
+        </div>
+      )}
+
       {editing && (
         <div className="bg-brand-surface rounded-xl border border-brand-border p-4 mb-6 space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -479,6 +731,7 @@ export default function AdminOffers() {
               placeholder="Top Badge (optional)"
               value={editing.display_badge}
               onChange={(e) => setEditing({ ...editing, display_badge: e.target.value })}
+              disabled={displaySchemaAvailable === false}
               className="input-field"
             />
 
@@ -486,15 +739,52 @@ export default function AdminOffers() {
               placeholder="Bottom Highlight (optional, e.g. ₹149)"
               value={editing.display_reward}
               onChange={(e) => setEditing({ ...editing, display_reward: e.target.value })}
+              disabled={displaySchemaAvailable === false}
               className="input-field"
             />
 
-            <input
-              placeholder="Background Image URL (optional)"
-              value={editing.background_image_url}
-              onChange={(e) => setEditing({ ...editing, background_image_url: e.target.value })}
-              className="input-field sm:col-span-2"
-            />
+            <div className="sm:col-span-2 rounded-xl border border-brand-border bg-brand-bg/20 p-3">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  placeholder="Background Image URL (optional)"
+                  value={editing.background_image_url}
+                  onChange={(e) => setEditing({ ...editing, background_image_url: e.target.value })}
+                  disabled={displaySchemaAvailable === false}
+                  className="input-field flex-1"
+                />
+                <input
+                  ref={backgroundImageInputRef}
+                  type="file"
+                  accept={ACCEPTED_OFFER_IMAGE_TYPES.join(',')}
+                  onChange={handleBackgroundImageFileChange}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => backgroundImageInputRef.current?.click()}
+                  disabled={displaySchemaAvailable === false || uploadingBackgroundImage}
+                  className="btn-outline px-4 py-2 text-sm"
+                >
+                  {uploadingBackgroundImage ? 'Uploading...' : (
+                    <span className="inline-flex items-center gap-1">
+                      <ImagePlus size={14} />
+                      Upload Image
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditing({ ...editing, background_image_url: '' })}
+                  disabled={!editing.background_image_url}
+                  className="btn-outline px-4 py-2 text-sm"
+                >
+                  Clear Image
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-brand-text-dim">
+                Upload a PNG, JPG, WEBP, or GIF up to 5 MB, or paste a direct public image URL.
+              </p>
+            </div>
 
             {editing.is_cart_eligible && (
               <select
@@ -615,8 +905,18 @@ export default function AdminOffers() {
               {'\n'}Any Milkshake
             </p>
             <p className="text-xs text-brand-text-dim">
-              Add a background image URL to show promo art behind the slide text on Home and Menu.
+              Add a background image URL or upload an image to show promo art behind the slide text on Home and Menu.
             </p>
+            {displaySchemaAvailable === false && (
+              <p className="mt-2 text-xs text-amber-300">
+                The background image field is currently disabled until the display-field migration is applied in Supabase.
+              </p>
+            )}
+            {offerImageUploadAvailable === false && (
+              <p className="mt-2 text-xs text-amber-300">
+                Image uploads need the `offer-images` storage migration before the Upload Image button will work.
+              </p>
+            )}
           </div>
 
           <div className="rounded-lg border border-brand-border bg-brand-bg/40 p-3">
