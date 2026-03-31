@@ -129,11 +129,12 @@ export default function Home() {
                     <img
                       src={activeBannerBackgroundImage}
                       alt=""
-                      className="absolute inset-0 h-full w-full object-cover object-[78%_center] sm:object-right"
+                      className="absolute inset-0 h-full w-full object-cover object-center"
                       onError={() => markImageFailed(activeBannerBackgroundImage)}
                     />
-                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(216,178,78,0.18),_transparent_34%),radial-gradient(circle_at_78%_18%,_rgba(255,255,255,0.06),_transparent_24%)]" />
-                    <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(12,17,10,0.94)_0%,rgba(12,17,10,0.88)_30%,rgba(12,17,10,0.52)_58%,rgba(12,17,10,0.18)_100%)]" />
+                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(216,178,78,0.16),_transparent_30%),radial-gradient(circle_at_bottom_right,_rgba(255,255,255,0.08),_transparent_24%)]" />
+                    <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(10,14,8,0.82)_0%,rgba(10,14,8,0.68)_26%,rgba(10,14,8,0.34)_54%,rgba(10,14,8,0.18)_100%)]" />
+                    <div className="absolute inset-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),inset_0_-32px_60px_rgba(0,0,0,0.18)]" />
                   </>
                 )}
                 {!activeBannerBackgroundImage && (
@@ -142,8 +143,12 @@ export default function Home() {
                     <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(216,178,78,0.18),_transparent_34%),radial-gradient(circle_at_75%_18%,_rgba(255,255,255,0.05),_transparent_22%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_45%)]" />
                   </>
                 )}
-                <div className="relative flex h-full flex-col justify-end px-5 py-5 sm:px-7 sm:py-6 lg:py-7">
-                  <div className={activeBannerBackgroundImage ? 'max-w-[58%] sm:max-w-[52%] lg:max-w-[46%]' : 'max-w-xl'}>
+                <div className="relative flex h-full items-end px-5 py-5 sm:px-7 sm:py-6 lg:py-7">
+                  <div className={`rounded-[22px] border px-5 py-5 shadow-[0_24px_60px_rgba(0,0,0,0.22)] ${
+                    activeBannerBackgroundImage
+                      ? 'max-w-[320px] border-white/10 bg-[#10170d]/58 backdrop-blur-md sm:max-w-[360px] lg:max-w-[390px]'
+                      : 'max-w-xl border-brand-border bg-brand-surface/45'
+                  }`}>
                     <motion.span
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -165,7 +170,7 @@ export default function Home() {
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.2, duration: 0.4 }}
-                        className="mb-3 max-w-md whitespace-pre-line text-[13px] font-medium leading-snug text-brand-text-muted sm:text-[14px]"
+                        className="mb-3 whitespace-pre-line text-[13px] font-medium leading-snug text-brand-text-muted sm:text-[14px]"
                       >
                         {activeBannerDescription}
                       </motion.p>
