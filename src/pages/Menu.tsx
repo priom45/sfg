@@ -160,31 +160,26 @@ export default function MenuPage() {
                 transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
                 className="absolute inset-0"
               >
-                <div className={`absolute inset-0 ${
-                  activeBannerBackgroundImage
-                    ? 'bg-[linear-gradient(118deg,#0f150c_0%,#141c10_47%,#1c2515_100%)]'
-                    : 'bg-gradient-to-r from-brand-surface via-brand-surface-light to-brand-gold/10'
-                }`} />
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(216,178,78,0.18),_transparent_34%),radial-gradient(circle_at_75%_18%,_rgba(255,255,255,0.05),_transparent_22%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_45%)]" />
                 {activeBannerBackgroundImage && (
                   <>
-                    <div className="absolute inset-y-0 right-0 w-[44%] min-w-[220px] max-w-[430px]">
-                      <div className="absolute inset-y-5 left-2 right-5 rounded-[26px] border border-white/8 bg-[linear-gradient(150deg,rgba(255,255,255,0.05),rgba(255,255,255,0.015))] shadow-[0_28px_80px_rgba(0,0,0,0.28)]" />
-                      <div className="absolute inset-y-0 left-[-18%] right-0 bg-[radial-gradient(circle_at_56%_50%,_rgba(216,178,78,0.18),_transparent_38%),linear-gradient(270deg,rgba(12,17,10,0.06)_0%,rgba(12,17,10,0.34)_52%,rgba(12,17,10,0)_100%)]" />
-                      <div className="absolute inset-y-5 left-5 right-8 flex items-end justify-center">
-                        <img
-                          src={activeBannerBackgroundImage}
-                          alt=""
-                          className="h-full w-full object-contain object-center drop-shadow-[0_26px_60px_rgba(0,0,0,0.42)]"
-                          onError={() => markImageFailed(activeBannerBackgroundImage)}
-                        />
-                      </div>
-                    </div>
-                    <div className="absolute inset-y-6 right-[44%] w-px bg-gradient-to-b from-transparent via-brand-gold/18 to-transparent" />
+                    <img
+                      src={activeBannerBackgroundImage}
+                      alt=""
+                      className="absolute inset-0 h-full w-full object-cover object-[78%_center] sm:object-right"
+                      onError={() => markImageFailed(activeBannerBackgroundImage)}
+                    />
+                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(216,178,78,0.18),_transparent_34%),radial-gradient(circle_at_78%_18%,_rgba(255,255,255,0.06),_transparent_24%)]" />
+                    <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(12,17,10,0.94)_0%,rgba(12,17,10,0.88)_30%,rgba(12,17,10,0.52)_58%,rgba(12,17,10,0.18)_100%)]" />
                   </>
                 )}
-                <div className="relative flex h-full flex-col justify-end px-5 py-5 sm:px-7 sm:py-6">
-                  <div className={activeBannerBackgroundImage ? 'max-w-[54%] sm:max-w-[52%] lg:max-w-[50%]' : 'max-w-xl'}>
+                {!activeBannerBackgroundImage && (
+                  <>
+                    <div className="absolute inset-0 bg-gradient-to-r from-brand-surface via-brand-surface-light to-brand-gold/10" />
+                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(216,178,78,0.18),_transparent_34%),radial-gradient(circle_at_75%_18%,_rgba(255,255,255,0.05),_transparent_22%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_45%)]" />
+                  </>
+                )}
+                <div className="relative flex h-full flex-col justify-end px-5 py-5 sm:px-7 sm:py-6 lg:py-7">
+                  <div className={activeBannerBackgroundImage ? 'max-w-[58%] sm:max-w-[52%] lg:max-w-[46%]' : 'max-w-xl'}>
                     <motion.span
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
