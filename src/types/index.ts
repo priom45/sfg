@@ -92,6 +92,10 @@ export interface Offer {
   title: string;
   description: string;
   code: string | null;
+  display_badge?: string | null;
+  display_reward?: string | null;
+  background_image_url?: string | null;
+  is_cart_eligible?: boolean | null;
   offer_mode?: OfferMode | null;
   trigger_type?: OfferTriggerType | null;
   discount_type: OfferDiscountType;

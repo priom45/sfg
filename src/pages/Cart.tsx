@@ -13,6 +13,7 @@ import {
   getOfferEligibilityError,
   getOfferMode,
   getOfferRuleSummary,
+  isOfferCartEligible,
 } from '../lib/offers';
 import { customerSupabase } from '../lib/supabase';
 import { readCheckoutSuccessOrder, storeCheckoutSuccessOrder } from '../lib/checkoutSuccess';
@@ -90,7 +91,7 @@ export default function CartPage() {
       .gte('valid_until', now)
       .order('created_at', { ascending: false });
 
-    setActiveOffers(data || []);
+    setActiveOffers((data || []).filter(isOfferCartEligible));
   }
 
   async function applyCoupon() {

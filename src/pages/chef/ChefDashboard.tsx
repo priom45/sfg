@@ -32,6 +32,7 @@ export default function ChefDashboard() {
   const [tab, setTab] = useState<Tab>('queue');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [newOrderFlash, setNewOrderFlash] = useState(false);
+  const [acceptingOrderId, setAcceptingOrderId] = useState<string | null>(null);
   const [payingOrderId, setPayingOrderId] = useState<string | null>(null);
   const [handoffOrderId, setHandoffOrderId] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -97,19 +98,46 @@ export default function ChefDashboard() {
   }, [loadOrders]);
 
   async function acceptOrder(order: Order) {
+    if (acceptingOrderId === order.id) return;
+    setAcceptingOrderId(order.id);
+
     const items = orderItemsMap[order.id] || [];
     const totalItems = items.reduce((sum, item) => sum + item.quantity, 0);
     const estimatedMinutes = Math.max(5, Math.ceil(totalItems * 2.5));
+    const now = new Date().toISOString();
 
-    await supabase.from('orders').update({
+    const { error } = await supabase.from('orders').update({
       status: 'preparing',
-      confirmed_at: new Date().toISOString(),
-      accepted_at: new Date().toISOString(),
+      confirmed_at: now,
+      accepted_at: now,
       estimated_minutes: estimatedMinutes,
       queue_position: null,
     }).eq('id', order.id);
 
+    if (error) {
+      console.error('Failed to accept order', error);
+      showToast(error.message || 'Failed to move order to preparing', 'error');
+      setAcceptingOrderId(null);
+      return;
+    }
+
+    setOrders((prev) => prev.map((currentOrder) => (
+      currentOrder.id === order.id
+        ? {
+            ...currentOrder,
+            status: 'preparing',
+            confirmed_at: now,
+            accepted_at: now,
+            estimated_minutes: estimatedMinutes,
+            queue_position: null,
+          }
+        : currentOrder
+    )));
+    setTab('preparing');
+    showToast('Order moved to preparing');
+
     if (soundEnabled) playAcceptSound();
+    setAcceptingOrderId(null);
   }
 
   async function completeOrder(order: Order) {
@@ -524,10 +552,11 @@ export default function ChefDashboard() {
               {isQueue && (
                 <button
                   onClick={() => acceptOrder(order)}
+                  disabled={acceptingOrderId === order.id}
                   className="w-full mt-2 py-3.5 rounded-xl font-bold text-[14px] bg-orange-500 text-white hover:bg-orange-600 transition-all active:scale-[0.98] flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20"
                 >
                   <Zap size={18} />
-                  Accept & Start Preparing
+                  {acceptingOrderId === order.id ? 'Starting...' : 'Accept & Start Preparing'}
                 </button>
               )}
 

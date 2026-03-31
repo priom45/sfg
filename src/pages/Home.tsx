@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { ChevronRight, ChevronLeft, Clock, Sparkles, Flame } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
-import { getOfferBadgeLabel, getOfferRewardLabel, getOfferRuleSummary } from '../lib/offers';
+import { getOfferBadgeLabel, getOfferDisplayDescription, getOfferRewardLabel } from '../lib/offers';
 import { useCart } from '../contexts/CartContext';
 import { useToast } from '../components/Toast';
 import ProductCard from '../components/ProductCard';
@@ -12,6 +12,11 @@ import ScrollReveal from '../components/ScrollReveal';
 import { staggerContainer, staggerChild } from '../lib/animations';
 import { fetchCustomizationAvailability, itemHasAssignedCustomizations, type CustomizationAvailability } from '../lib/customizations';
 import type { Category, MenuItem, Offer } from '../types';
+
+function normalizeImageUrl(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
 
 export default function Home() {
   const [categories, setCategories] = useState<Category[]>([]);
@@ -22,6 +27,7 @@ export default function Home() {
   const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
   const [pendingAddOnItem, setPendingAddOnItem] = useState<{ cartItemId: string; menuItem: MenuItem; quantity: number } | null>(null);
   const [customizationAvailability, setCustomizationAvailability] = useState<CustomizationAvailability | null>(null);
+  const [failedImageUrls, setFailedImageUrls] = useState<Record<string, true>>({});
   const bannerTimer = useRef<ReturnType<typeof setInterval>>();
   const { addItem, removeItem } = useCart();
   const { showToast } = useToast();
@@ -88,15 +94,25 @@ export default function Home() {
     }
     setPendingAddOnItem({ cartItemId, menuItem: item, quantity: qty });
   }, [addItem, customizationAvailability, showToast]);
+  const markImageFailed = useCallback((url: string) => {
+    setFailedImageUrls((current) => (current[url] ? current : { ...current, [url]: true }));
+  }, []);
 
   const itemsByCategory = categories.map((cat) => ({
     category: cat,
     items: allItems.filter((it) => it.category_id === cat.id),
   })).filter((g) => g.items.length > 0);
+  const activeBannerOffer = offers[bannerIdx] || null;
+  const activeBannerDescription = activeBannerOffer ? getOfferDisplayDescription(activeBannerOffer) : null;
+  const activeBannerReward = activeBannerOffer ? getOfferRewardLabel(activeBannerOffer) : null;
+  const requestedBannerBackgroundImage = normalizeImageUrl(activeBannerOffer?.background_image_url);
+  const activeBannerBackgroundImage = requestedBannerBackgroundImage && !failedImageUrls[requestedBannerBackgroundImage]
+    ? requestedBannerBackgroundImage
+    : null;
 
   return (
     <div className="bg-brand-bg min-h-screen pb-20">
-      {offers.length > 0 && (
+      {activeBannerOffer && (
         <section className="px-4 pt-4 pb-2">
           <div className="relative h-[228px] overflow-hidden rounded-[24px] border border-brand-border bg-brand-surface sm:h-[268px] lg:h-[308px]">
             <AnimatePresence mode="popLayout" initial={false}>
@@ -108,8 +124,20 @@ export default function Home() {
                 transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
                 className="absolute inset-0"
               >
+                {activeBannerBackgroundImage && (
+                  <img
+                    src={activeBannerBackgroundImage}
+                    alt=""
+                    className="absolute inset-0 h-full w-full object-cover object-center sm:object-right"
+                    onError={() => markImageFailed(activeBannerBackgroundImage)}
+                  />
+                )}
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(216,178,78,0.18),_transparent_34%),radial-gradient(circle_at_bottom_right,_rgba(255,255,255,0.06),_transparent_30%)]" />
-                <div className="absolute inset-0 bg-gradient-to-r from-brand-surface via-brand-surface-light to-brand-gold/10" />
+                <div className={`absolute inset-0 ${
+                  activeBannerBackgroundImage
+                    ? 'bg-gradient-to-r from-[#11170d]/95 via-[#1b2514]/88 to-[#2c371d]/58'
+                    : 'bg-gradient-to-r from-brand-surface via-brand-surface-light to-brand-gold/10'
+                }`} />
                 <div className="relative flex h-full flex-col justify-end gap-4 px-5 py-5 sm:px-7 sm:py-6 lg:flex-row lg:items-end lg:justify-between">
                   <div className="max-w-xl">
                     <motion.span
@@ -118,7 +146,7 @@ export default function Home() {
                       transition={{ delay: 0.1, duration: 0.35 }}
                       className="inline-block bg-brand-gold/20 text-brand-gold text-[12px] font-bold px-2.5 py-1 rounded-md mb-1.5 tracking-wide"
                     >
-                      {getOfferBadgeLabel(offers[bannerIdx])}
+                      {getOfferBadgeLabel(activeBannerOffer)}
                     </motion.span>
                     <motion.h3
                       initial={{ opacity: 0, y: 10 }}
@@ -126,24 +154,28 @@ export default function Home() {
                       transition={{ delay: 0.15, duration: 0.4 }}
                       className="mb-1 text-[22px] font-extrabold leading-tight text-white sm:text-[28px]"
                     >
-                      {offers[bannerIdx].title}
+                      {activeBannerOffer.title}
                     </motion.h3>
-                    <motion.p
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.2, duration: 0.4 }}
-                      className="mb-3 max-w-md text-[13px] font-medium leading-snug text-brand-text-muted sm:text-[14px]"
-                    >
-                      {offers[bannerIdx].description || getOfferRuleSummary(offers[bannerIdx])}
-                    </motion.p>
-                    <motion.span
-                      initial={{ opacity: 0, scale: 0.9 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      transition={{ delay: 0.25, duration: 0.35 }}
-                      className="text-brand-gold font-black text-[22px] tracking-tight inline-block"
-                    >
-                      {getOfferRewardLabel(offers[bannerIdx])}
-                    </motion.span>
+                    {activeBannerDescription && (
+                      <motion.p
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.2, duration: 0.4 }}
+                        className="mb-3 max-w-md whitespace-pre-line text-[13px] font-medium leading-snug text-brand-text-muted sm:text-[14px]"
+                      >
+                        {activeBannerDescription}
+                      </motion.p>
+                    )}
+                    {activeBannerReward && (
+                      <motion.span
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        transition={{ delay: 0.25, duration: 0.35 }}
+                        className="text-brand-gold font-black text-[22px] tracking-tight inline-block"
+                      >
+                        {activeBannerReward}
+                      </motion.span>
+                    )}
                   </div>
                   <Link
                     to="/menu"

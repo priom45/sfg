@@ -15,6 +15,10 @@ function normalizeNumber(value: number) {
   return Number.isFinite(value) ? value : 0;
 }
 
+function normalizeOptionalText(value: string | null | undefined) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 function formatNumber(value: number) {
   const normalized = normalizeNumber(value);
   return Number.isInteger(normalized) ? String(normalized) : normalized.toFixed(2);
@@ -22,6 +26,10 @@ function formatNumber(value: number) {
 
 export function getOfferMode(offer: Offer): OfferMode {
   return offer.offer_mode === 'automatic' ? 'automatic' : 'coupon';
+}
+
+export function isOfferCartEligible(offer: Offer) {
+  return offer.is_cart_eligible !== false;
 }
 
 export function getOfferTriggerType(offer: Offer): OfferTriggerType {
@@ -52,10 +60,28 @@ export function getCartAddOnTotal(items: CartItem[]) {
 }
 
 export function getOfferBadgeLabel(offer: Offer) {
+  const customBadge = normalizeOptionalText(offer.display_badge);
+  if (customBadge) {
+    return customBadge;
+  }
+
+  if (!isOfferCartEligible(offer)) {
+    return 'PROMO';
+  }
+
   return getOfferMode(offer) === 'coupon' ? getOfferCode(offer) || 'COUPON' : 'AUTO OFFER';
 }
 
 export function getOfferRewardLabel(offer: Offer) {
+  const customReward = normalizeOptionalText(offer.display_reward);
+  if (customReward) {
+    return customReward;
+  }
+
+  if (!isOfferCartEligible(offer)) {
+    return null;
+  }
+
   switch (getOfferDiscountType(offer)) {
     case 'percentage':
       return `${formatNumber(offer.discount_value)}% OFF`;
@@ -68,9 +94,18 @@ export function getOfferRewardLabel(offer: Offer) {
   }
 }
 
+export function getOfferDisplayDescription(offer: Offer) {
+  const customDescription = normalizeOptionalText(offer.description);
+  if (customDescription) {
+    return customDescription;
+  }
+
+  return isOfferCartEligible(offer) ? getOfferRuleSummary(offer) : null;
+}
+
 export function getOfferRuleSummary(offer: Offer) {
   const triggerType = getOfferTriggerType(offer);
-  const rewardLabel = getOfferRewardLabel(offer);
+  const rewardLabel = getOfferRewardLabel(offer) || offer.title;
 
   if (triggerType === 'item_quantity') {
     const requiredQuantity = getRequiredItemQuantity(offer) || 1;

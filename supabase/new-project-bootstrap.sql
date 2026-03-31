@@ -1825,3 +1825,27 @@ BEGIN
 END $$;
 
 -- END MIGRATION: 20260324120000_add_takeaway_fee_to_orders.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260330120000_add_display_fields_to_offers.sql
+-- ===============================================
+
+ALTER TABLE offers
+  ADD COLUMN IF NOT EXISTS display_badge text,
+  ADD COLUMN IF NOT EXISTS display_reward text,
+  ADD COLUMN IF NOT EXISTS is_cart_eligible boolean NOT NULL DEFAULT true;
+
+UPDATE offers
+SET is_cart_eligible = true
+WHERE is_cart_eligible IS NULL;
+
+-- END MIGRATION: 20260330120000_add_display_fields_to_offers.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260330123000_add_background_image_to_offers.sql
+-- ===============================================
+
+ALTER TABLE offers
+  ADD COLUMN IF NOT EXISTS background_image_url text;
+
+-- END MIGRATION: 20260330123000_add_background_image_to_offers.sql
