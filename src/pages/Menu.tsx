@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Search, SlidersHorizontal, X, Clock, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
+import { buildBreadcrumbSchema, buildSchemaGraph, buildSeoUrl, seoDefaultKeywords, seoSiteName } from '../lib/seo';
 import type { Category, MenuItem, Offer } from '../types';
 import ProductCard from '../components/ProductCard';
 import CustomizationModal from '../components/CustomizationModal';
@@ -12,11 +13,54 @@ import { useToast } from '../components/Toast';
 import { playAddToCartSound } from '../lib/sounds';
 import { staggerContainer, staggerChild } from '../lib/animations';
 import { fetchCustomizationAvailability, itemHasAssignedCustomizations, type CustomizationAvailability } from '../lib/customizations';
-import { getOfferBadgeLabel, getOfferCtaText, getOfferDisplayDescription, getOfferRewardLabel } from '../lib/offers';
+import { getOfferBadgeLabel, getOfferCtaHref, getOfferCtaText, getOfferDisplayDescription, getOfferRewardLabel } from '../lib/offers';
 
 function normalizeImageUrl(value: string | null | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function setNamedMeta(name: string, content: string) {
+  upsertHeadTag(`meta[name="${name}"]`, 'meta', { name, content });
+}
+
+function setPropertyMeta(property: string, content: string) {
+  upsertHeadTag(`meta[property="${property}"]`, 'meta', { property, content });
+}
+
+function setJsonLd(scriptId: string, schema?: Record<string, unknown>) {
+  const existing = document.head.querySelector<HTMLScriptElement>(`#${scriptId}`);
+
+  if (!schema) {
+    existing?.remove();
+    return;
+  }
+
+  const script = existing || document.createElement('script');
+  script.id = scriptId;
+  script.type = 'application/ld+json';
+  script.textContent = JSON.stringify(schema);
+
+  if (!existing) {
+    document.head.appendChild(script);
+  }
+}
+
+function upsertHeadTag(
+  selector: string,
+  tagName: 'meta' | 'link',
+  attributes: Record<string, string>,
+) {
+  const existing = document.head.querySelector<HTMLElement>(selector);
+  const element = existing || document.createElement(tagName);
+
+  for (const [name, value] of Object.entries(attributes)) {
+    element.setAttribute(name, value);
+  }
+
+  if (!existing) {
+    document.head.appendChild(element);
+  }
 }
 
 export default function MenuPage() {
@@ -25,7 +69,7 @@ export default function MenuPage() {
   const [items, setItems] = useState<MenuItem[]>([]);
   const [offers, setOffers] = useState<Offer[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(searchParams.get('search') || '');
   const [activeCategory, setActiveCategory] = useState(searchParams.get('category') || 'all');
   const [sortBy, setSortBy] = useState<'popular' | 'price_low' | 'price_high'>('popular');
   const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
@@ -38,6 +82,8 @@ export default function MenuPage() {
   const { addItem, removeItem } = useCart();
   const { showToast } = useToast();
   const categoryParam = searchParams.get('category') || 'all';
+  const searchParam = searchParams.get('search') || '';
+  const itemParam = searchParams.get('item');
 
   const loadData = useCallback(async () => {
     const [catRes, itemRes, offerRes, availability] = await Promise.all([
@@ -59,6 +105,28 @@ export default function MenuPage() {
   useEffect(() => {
     setActiveCategory(categoryParam);
   }, [categoryParam]);
+
+  useEffect(() => {
+    setSearch(searchParam);
+  }, [searchParam]);
+
+  useEffect(() => {
+    if (!itemParam || items.length === 0 || categories.length === 0) {
+      return;
+    }
+
+    const targetItem = items.find((item) => item.id === itemParam);
+    if (!targetItem) {
+      return;
+    }
+
+    const targetCategory = categories.find((category) => category.id === targetItem.category_id);
+    if (targetCategory && activeCategory !== targetCategory.slug) {
+      setActiveCategory(targetCategory.slug);
+    }
+
+    setSelectedItem((current) => (current?.id === targetItem.id ? current : targetItem));
+  }, [activeCategory, categories, itemParam, items]);
 
   useEffect(() => {
     setBannerIdx((current) => {
@@ -95,10 +163,15 @@ export default function MenuPage() {
     }
     return result;
   }, [items, categories, activeCategory, search, sortBy]);
+  const currentCategory = useMemo(
+    () => (activeCategory === 'all' ? null : categories.find((category) => category.slug === activeCategory) || null),
+    [activeCategory, categories],
+  );
 
   function handleCategoryChange(slug: string) {
     setActiveCategory(slug);
     const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('item');
     if (slug === 'all') {
       nextParams.delete('category');
     } else {
@@ -106,6 +179,28 @@ export default function MenuPage() {
     }
     setSearchParams(nextParams);
   }
+
+  function handleSearchChange(value: string) {
+    setSearch(value);
+    const nextParams = new URLSearchParams(searchParams);
+    if (value.trim()) {
+      nextParams.set('search', value);
+    } else {
+      nextParams.delete('search');
+    }
+    setSearchParams(nextParams, { replace: true });
+  }
+
+  const closeSelectedItem = useCallback(() => {
+    setSelectedItem(null);
+    if (!itemParam) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('item');
+    setSearchParams(nextParams, { replace: true });
+  }, [itemParam, searchParams, setSearchParams]);
 
   const handleImageClick = useCallback((item: MenuItem) => {
     setSelectedItem(item);
@@ -127,25 +222,125 @@ export default function MenuPage() {
   const handleBaseConfirm = useCallback((item: MenuItem, qty: number) => {
     const supportsCustomizations = itemHasAssignedCustomizations(item, customizationAvailability);
     const cartItemId = addItem(item, qty, []);
-    setSelectedItem(null);
     playAddToCartSound();
     showToast(`${item.name} added to cart!`);
+    setSelectedItem(null);
+    if (itemParam) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('item');
+      setSearchParams(nextParams, { replace: true });
+    }
     if (!supportsCustomizations) {
       return;
     }
     setPendingAddOnItem({ cartItemId, menuItem: item, quantity: qty });
-  }, [addItem, customizationAvailability, showToast]);
+  }, [addItem, customizationAvailability, itemParam, searchParams, setSearchParams, showToast]);
   const markImageFailed = useCallback((url: string) => {
     setFailedImageUrls((current) => (current[url] ? current : { ...current, [url]: true }));
   }, []);
+  const categorySlugById = Object.fromEntries(categories.map((category) => [category.id, category.slug]));
+  const menuItemsById = Object.fromEntries(items.map((item) => [item.id, { id: item.id, category_id: item.category_id }]));
   const activeBannerOffer = offers[bannerIdx] || null;
   const activeBannerDescription = activeBannerOffer ? getOfferDisplayDescription(activeBannerOffer) : null;
   const activeBannerReward = activeBannerOffer ? getOfferRewardLabel(activeBannerOffer) : null;
   const activeBannerCtaText = activeBannerOffer ? getOfferCtaText(activeBannerOffer) : 'Order Now';
+  const activeBannerCtaHref = activeBannerOffer
+    ? getOfferCtaHref(activeBannerOffer, { categorySlugById, menuItemsById })
+    : '/menu';
   const requestedBannerBackgroundImage = normalizeImageUrl(activeBannerOffer?.background_image_url);
   const activeBannerBackgroundImage = requestedBannerBackgroundImage && !failedImageUrls[requestedBannerBackgroundImage]
     ? requestedBannerBackgroundImage
     : null;
+  const shouldScrollBannerCta = activeBannerCtaHref === '/menu';
+
+  useEffect(() => {
+    if (loading || categories.length === 0) {
+      return;
+    }
+
+    const highlightedItems = filteredItems.slice(0, 24);
+    const menuDescription = currentCategory
+      ? `Browse ${currentCategory.name} at ${seoSiteName}, including ${highlightedItems.slice(0, 4).map((item) => item.name).join(', ')}.`
+      : `Browse the full ${seoSiteName} menu including waffles, shakes, chats, fries, momos, burgers, and desserts.`;
+    const keywordSet = new Set([
+      ...seoDefaultKeywords,
+      ...(currentCategory ? [currentCategory.name.toLowerCase(), `${currentCategory.name.toLowerCase()} menu`] : ['full dessert menu', 'waffle shop menu']),
+      ...highlightedItems.slice(0, 8).map((item) => item.name.toLowerCase()),
+    ]);
+
+    setNamedMeta('keywords', Array.from(keywordSet).join(', '));
+    setNamedMeta('description', menuDescription);
+    setPropertyMeta('og:description', menuDescription);
+    setNamedMeta('twitter:description', menuDescription);
+
+    const breadcrumbItems = [
+      { name: 'Home', path: '/' },
+      { name: 'Menu', path: '/menu' },
+      ...(currentCategory ? [{ name: currentCategory.name, path: `/menu?category=${currentCategory.slug}` }] : []),
+    ];
+
+    const schema = buildSchemaGraph([
+      {
+        '@type': search.trim() ? 'SearchResultsPage' : 'CollectionPage',
+        '@id': buildSeoUrl(`/menu${currentCategory ? `?category=${currentCategory.slug}` : ''}${search.trim() ? `${currentCategory ? '&' : '?'}search=${encodeURIComponent(search.trim())}` : ''}#webpage`),
+        url: buildSeoUrl(`/menu${currentCategory ? `?category=${currentCategory.slug}` : ''}${search.trim() ? `${currentCategory ? '&' : '?'}search=${encodeURIComponent(search.trim())}` : ''}`),
+        name: currentCategory ? `${currentCategory.name} Menu | ${seoSiteName}` : `${seoSiteName} Menu`,
+        description: menuDescription,
+        about: {
+          '@type': 'Menu',
+          name: currentCategory ? `${currentCategory.name} Menu Section` : `${seoSiteName} Menu`,
+        },
+        mainEntity: {
+          '@type': 'ItemList',
+          itemListOrder: 'https://schema.org/ItemListOrderAscending',
+          numberOfItems: highlightedItems.length,
+          itemListElement: highlightedItems.map((item, index) => {
+            const itemCategory = categories.find((category) => category.id === item.category_id);
+            const itemUrl = `/menu?${new URLSearchParams({
+              ...(itemCategory ? { category: itemCategory.slug } : {}),
+              item: item.id,
+            }).toString()}`;
+
+            return {
+              '@type': 'ListItem',
+              position: index + 1,
+              url: buildSeoUrl(itemUrl),
+              item: {
+                '@type': 'MenuItem',
+                name: item.name,
+                description: item.description,
+                image: buildSeoUrl(item.image_url),
+                offers: {
+                  '@type': 'Offer',
+                  priceCurrency: 'INR',
+                  price: item.price.toFixed(2),
+                  availability: item.is_available ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock',
+                  url: buildSeoUrl(itemUrl),
+                },
+              },
+            };
+          }),
+        },
+      },
+      {
+        '@type': 'Menu',
+        '@id': buildSeoUrl('/menu#live-menu'),
+        name: `${seoSiteName} Menu`,
+        hasMenuSection: categories.map((category) => ({
+          '@type': 'MenuSection',
+          name: category.name,
+          url: buildSeoUrl(`/menu?category=${category.slug}`),
+        })),
+      },
+      buildBreadcrumbSchema(breadcrumbItems),
+    ]);
+
+    setJsonLd('menu-search-schema', schema);
+
+    return () => {
+      setJsonLd('menu-search-schema');
+    };
+  }, [categories, currentCategory, filteredItems, loading, search]);
 
   return (
     <div className="min-h-screen bg-brand-bg">
@@ -224,13 +419,22 @@ export default function MenuPage() {
                       transition={{ delay: 0.3, duration: 0.35 }}
                       className="mt-3 sm:mt-4"
                     >
-                      <button
-                        type="button"
-                        onClick={() => filterBarRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-                        className="inline-flex w-fit items-center gap-1.5 rounded-xl bg-brand-gold px-4 py-2 text-[13px] font-bold text-brand-bg shadow-[0_14px_30px_rgba(216,178,78,0.18)] transition-all hover:-translate-y-0.5 hover:brightness-110 sm:px-5 sm:py-2.5 sm:text-[14px]"
-                      >
-                        {activeBannerCtaText}
-                      </button>
+                      {shouldScrollBannerCta ? (
+                        <button
+                          type="button"
+                          onClick={() => filterBarRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                          className="inline-flex w-fit items-center gap-1.5 rounded-xl bg-brand-gold px-4 py-2 text-[13px] font-bold text-brand-bg shadow-[0_14px_30px_rgba(216,178,78,0.18)] transition-all hover:-translate-y-0.5 hover:brightness-110 sm:px-5 sm:py-2.5 sm:text-[14px]"
+                        >
+                          {activeBannerCtaText}
+                        </button>
+                      ) : (
+                        <Link
+                          to={activeBannerCtaHref}
+                          className="inline-flex w-fit items-center gap-1.5 rounded-xl bg-brand-gold px-4 py-2 text-[13px] font-bold text-brand-bg shadow-[0_14px_30px_rgba(216,178,78,0.18)] transition-all hover:-translate-y-0.5 hover:brightness-110 sm:px-5 sm:py-2.5 sm:text-[14px]"
+                        >
+                          {activeBannerCtaText}
+                        </Link>
+                      )}
                     </motion.div>
                   </div>
                 </div>
@@ -295,12 +499,12 @@ export default function MenuPage() {
                 type="text"
                 placeholder="Search waffles, shakes, and toppings..."
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 className="input-field pl-11 text-[15px] font-medium"
                 aria-label="Search menu items"
               />
               {search && (
-                <button onClick={() => setSearch('')} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-brand-text-dim hover:text-white transition-colors">
+                <button onClick={() => handleSearchChange('')} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-brand-text-dim hover:text-white transition-colors">
                   <X size={18} strokeWidth={2.5} />
                 </button>
               )}
@@ -382,7 +586,7 @@ export default function MenuPage() {
         {selectedItem && (
           <CustomizationModal
             item={selectedItem}
-            onClose={() => setSelectedItem(null)}
+            onClose={closeSelectedItem}
             onConfirm={(item, qty) => handleBaseConfirm(item, qty)}
             showCustomizations={false}
           />

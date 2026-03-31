@@ -1,4 +1,4 @@
-import type { CartItem, MenuItem, Offer, OfferDiscountType, OfferMode, OfferTriggerType } from '../types';
+import type { CartItem, MenuItem, Offer, OfferCtaTargetType, OfferDiscountType, OfferMode, OfferTriggerType } from '../types';
 
 export interface OfferPricingContext {
   subtotal: number;
@@ -24,6 +24,11 @@ export interface OfferRewardItem {
   unit_price: number;
   offer_id: string;
   offer_title: string;
+}
+
+export interface OfferCtaLinkContext {
+  categorySlugById?: Record<string, string>;
+  menuItemsById?: Record<string, Pick<MenuItem, 'id' | 'category_id'>>;
 }
 
 function normalizeNumber(value: number) {
@@ -146,6 +151,44 @@ export function getOfferBadgeLabel(offer: Offer) {
 
 export function getOfferCtaText(offer: Offer) {
   return normalizeOptionalText(offer.cta_text) || 'Order Now';
+}
+
+export function getOfferCtaTargetType(offer: Offer): OfferCtaTargetType {
+  return offer.cta_target_type === 'category'
+    ? 'category'
+    : offer.cta_target_type === 'item'
+      ? 'item'
+      : 'menu';
+}
+
+export function getOfferCtaHref(offer: Offer, context: OfferCtaLinkContext = {}) {
+  const targetType = getOfferCtaTargetType(offer);
+
+  if (targetType === 'category') {
+    const categoryId = normalizeOptionalText(offer.cta_target_category_id);
+    const categorySlug = categoryId ? context.categorySlugById?.[categoryId] : null;
+    return categorySlug ? `/menu?category=${encodeURIComponent(categorySlug)}` : '/menu';
+  }
+
+  if (targetType === 'item') {
+    const menuItemId = normalizeOptionalText(offer.cta_target_menu_item_id);
+    if (!menuItemId) {
+      return '/menu';
+    }
+
+    const params = new URLSearchParams();
+    const categoryId = context.menuItemsById?.[menuItemId]?.category_id;
+    const categorySlug = categoryId ? context.categorySlugById?.[categoryId] : null;
+
+    if (categorySlug) {
+      params.set('category', categorySlug);
+    }
+
+    params.set('item', menuItemId);
+    return `/menu?${params.toString()}`;
+  }
+
+  return '/menu';
 }
 
 export function getOfferRewardLabel(offer: Offer) {

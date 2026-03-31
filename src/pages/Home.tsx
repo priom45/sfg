@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { ChevronRight, ChevronLeft, Clock, Sparkles, Flame } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
-import { getOfferBadgeLabel, getOfferCtaText, getOfferDisplayDescription, getOfferRewardLabel } from '../lib/offers';
+import { getOfferBadgeLabel, getOfferCtaHref, getOfferCtaText, getOfferDisplayDescription, getOfferRewardLabel } from '../lib/offers';
 import { useCart } from '../contexts/CartContext';
 import { useToast } from '../components/Toast';
 import ProductCard from '../components/ProductCard';
@@ -102,10 +102,15 @@ export default function Home() {
     category: cat,
     items: allItems.filter((it) => it.category_id === cat.id),
   })).filter((g) => g.items.length > 0);
+  const categorySlugById = Object.fromEntries(categories.map((category) => [category.id, category.slug]));
+  const menuItemsById = Object.fromEntries(allItems.map((item) => [item.id, { id: item.id, category_id: item.category_id }]));
   const activeBannerOffer = offers[bannerIdx] || null;
   const activeBannerDescription = activeBannerOffer ? getOfferDisplayDescription(activeBannerOffer) : null;
   const activeBannerReward = activeBannerOffer ? getOfferRewardLabel(activeBannerOffer) : null;
   const activeBannerCtaText = activeBannerOffer ? getOfferCtaText(activeBannerOffer) : 'Order Now';
+  const activeBannerCtaHref = activeBannerOffer
+    ? getOfferCtaHref(activeBannerOffer, { categorySlugById, menuItemsById })
+    : '/menu';
   const requestedBannerBackgroundImage = normalizeImageUrl(activeBannerOffer?.background_image_url);
   const activeBannerBackgroundImage = requestedBannerBackgroundImage && !failedImageUrls[requestedBannerBackgroundImage]
     ? requestedBannerBackgroundImage
@@ -189,7 +194,7 @@ export default function Home() {
                       className="mt-3 sm:mt-4"
                     >
                       <Link
-                        to="/menu"
+                        to={activeBannerCtaHref}
                         className="inline-flex w-fit items-center gap-1.5 rounded-xl bg-brand-gold px-4 py-2 text-[13px] font-bold text-brand-bg shadow-[0_14px_30px_rgba(216,178,78,0.18)] transition-all hover:-translate-y-0.5 hover:brightness-110 sm:px-5 sm:py-2.5 sm:text-[14px]"
                       >
                         {activeBannerCtaText}

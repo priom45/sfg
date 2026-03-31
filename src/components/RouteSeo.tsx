@@ -160,20 +160,28 @@ function getRouteMetadata(pathname: string, search: string): SeoMetadata {
   if (pathname === '/menu') {
     const searchParams = new URLSearchParams(search);
     const categorySlug = searchParams.get('category');
+    const searchTerm = searchParams.get('search')?.trim() || '';
     const categoryName = categorySlug ? humanizeSlug(categorySlug) : '';
-    const title = categoryName
-      ? `${categoryName} Menu | ${seoSiteName}`
-      : `Waffle Menu | ${seoSiteName}`;
-    const description = categoryName
-      ? `Browse ${categoryName.toLowerCase()} waffles, desserts, shakes, and premium toppings from The Supreme Waffle menu.`
-      : 'Browse the full Supreme Waffle menu with Belgian waffles, fruit waffles, dessert combos, shakes, veg picks, and eggless options.';
+    const title = searchTerm
+      ? `${searchTerm} Menu Results${categoryName ? ` In ${categoryName}` : ''} | ${seoSiteName}`
+      : categoryName
+        ? `${categoryName} Menu | ${seoSiteName}`
+        : `Waffle Menu | ${seoSiteName}`;
+    const description = searchTerm
+      ? `Search The Supreme Waffle menu for ${searchTerm}${categoryName ? ` in ${categoryName}` : ''}, including waffles, shakes, desserts, fries, chats, and combos.`
+      : categoryName
+        ? `Browse ${categoryName.toLowerCase()} waffles, desserts, shakes, and premium toppings from The Supreme Waffle menu.`
+        : 'Browse the full Supreme Waffle menu with Belgian waffles, fruit waffles, dessert combos, shakes, veg picks, and eggless options.';
+    const extraKeywords = searchTerm
+      ? [searchTerm.toLowerCase(), `${searchTerm.toLowerCase()} menu`, `${searchTerm.toLowerCase()} online order`]
+      : [];
 
     return {
       title,
       description,
       path: '/menu',
       robots: defaultRobots,
-      keywords: [...seoDefaultKeywords, 'waffle menu online', 'dessert menu'],
+      keywords: [...seoDefaultKeywords, 'waffle menu online', 'dessert menu', ...extraKeywords],
       schema: buildSchemaGraph([
         {
           '@type': 'CollectionPage',

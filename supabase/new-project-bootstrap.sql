@@ -2033,3 +2033,21 @@ ALTER TABLE public.orders
   ALTER COLUMN order_id SET DEFAULT public.generate_order_id();
 
 -- END MIGRATION: 20260401123000_ensure_order_ids_start_at_sw_1.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260401131500_add_offer_cta_targets.sql
+-- ===============================================
+
+ALTER TABLE offers
+  ADD COLUMN IF NOT EXISTS cta_target_type text,
+  ADD COLUMN IF NOT EXISTS cta_target_category_id uuid REFERENCES categories(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS cta_target_menu_item_id uuid REFERENCES menu_items(id) ON DELETE SET NULL;
+
+UPDATE offers
+SET cta_target_type = 'menu'
+WHERE cta_target_type IS NULL;
+
+ALTER TABLE offers
+  ALTER COLUMN cta_target_type SET DEFAULT 'menu';
+
+-- END MIGRATION: 20260401131500_add_offer_cta_targets.sql

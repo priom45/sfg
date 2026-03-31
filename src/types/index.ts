@@ -86,6 +86,7 @@ export interface SiteSettings {
 export type OfferMode = 'coupon' | 'automatic';
 export type OfferTriggerType = 'min_order' | 'item_quantity';
 export type OfferDiscountType = 'percentage' | 'flat' | 'free_addons' | 'free_item';
+export type OfferCtaTargetType = 'menu' | 'category' | 'item';
 
 export interface Offer {
   id: string;
@@ -96,6 +97,9 @@ export interface Offer {
   display_reward?: string | null;
   background_image_url?: string | null;
   cta_text?: string | null;
+  cta_target_type?: OfferCtaTargetType | null;
+  cta_target_category_id?: string | null;
+  cta_target_menu_item_id?: string | null;
   is_cart_eligible?: boolean | null;
   offer_mode?: OfferMode | null;
   trigger_type?: OfferTriggerType | null;

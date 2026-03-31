@@ -1,20 +1,60 @@
 export type SeoSchemaNode = Record<string, unknown>;
 
-export const seoSiteName = 'The Supreme Waffle';
-export const seoDefaultTitle = `${seoSiteName} | Premium Gourmet Waffles | Order Online`;
-export const seoDefaultDescription = 'Order handcrafted Belgian waffles, dessert combos, and shakes from The Supreme Waffle. Explore premium toppings, veg picks, eggless options, and fresh made-to-order favorites.';
+export const seoSiteName = 'The Supreme Waffles';
+export const seoDefaultTitle = 'Best Waffles & Thick Shakes in Vijayawada | The Supreme Waffles';
+export const seoDefaultDescription = 'The Supreme Waffles in Vijayawada serves Belgian waffles, stick waffles, thick shakes, milkshakes, dessert combos, fries, momos, and street food favorites. Order online for the best waffles, shakes, and combo offers in Vijayawada.';
 export const seoDefaultImage = '/logo-full.png';
 export const seoDefaultKeywords = [
-  'The Supreme Waffle',
-  'gourmet waffles',
-  'Belgian waffles',
-  'dessert cafe',
+  'The Supreme Waffles',
+  'The Supreme Waffles Vijayawada',
+  'Supreme Waffles menu',
+  'Supreme Waffles offers',
+  'Supreme Waffles shakes',
+  'Supreme Waffles combos',
+  'supreme waffles Vijayawada',
+  'best waffles in Vijayawada',
+  'waffles in Vijayawada',
+  'dessert shop in Vijayawada',
+  'dessert shop Vijayawada near me',
+  'waffle shop near me',
+  'Belgian waffles near me',
+  'thick shakes near me',
+  'milkshakes near me',
+  'ice cream waffles near me',
+  'best dessert combo offers Vijayawada',
+  'street food waffles Vijayawada',
   'waffle menu',
-  'eggless waffles',
-  'waffle takeaway',
+  'Belgian chocolate waffle',
+  'dark fantasy waffle',
+  'white chocolate waffle',
+  'triple chocolate waffle',
+  'KitKat waffle',
+  'stick waffle India',
+  'hot dog waffle Vijayawada',
+  'sweet waffle desserts',
   'milkshakes',
-  'dessert delivery',
-  'best waffles near me',
+  'thick chocolate shake',
+  'Oreo milkshake',
+  'KitKat milkshake',
+  'caramel milkshake',
+  'best thick shakes in Vijayawada',
+  'kurkure momos near me',
+  'fried momos Vijayawada',
+  'peri peri fries near me',
+  'chicken burger combo Vijayawada',
+  'chicken nuggets near me',
+  'buy 1 get 1 shakes offer',
+  'combo offers food near me',
+  'opening day food offers Vijayawada',
+  'discount waffles near me',
+  'best deals on desserts',
+  'best waffle shop near Benz Circle Vijayawada',
+  'affordable waffles under 100 rupees',
+  'best milkshakes under 150',
+  'budget snack combos Vijayawada',
+  'crispy fried momos near me',
+  'quick bite desserts Vijayawada',
+  'best place for waffles in Vijayawada',
 ];
 
 const fallbackSiteUrl = 'https://thesupreme.waffle';
@@ -56,6 +96,11 @@ export const websiteSchema = {
   publisher: {
     '@id': buildSeoUrl('/#organization'),
   },
+  potentialAction: {
+    '@type': 'SearchAction',
+    target: `${buildSeoUrl('/menu')}?search={search_term_string}`,
+    'query-input': 'required name=search_term_string',
+  },
 };
 
 export const restaurantSchema = {
@@ -70,15 +115,17 @@ export const restaurantSchema = {
   description: seoDefaultDescription,
   email: 'thesupremewafflee@gmail.com',
   telephone: '+91 98765 43210',
-  servesCuisine: ['Waffles', 'Desserts', 'Milkshakes'],
+  servesCuisine: ['Waffles', 'Belgian Waffles', 'Desserts', 'Milkshakes', 'Thick Shakes', 'Fast Food', 'Street Food'],
   priceRange: '$$',
   menu: buildSeoUrl('/menu'),
   address: {
     '@type': 'PostalAddress',
     streetAddress: 'Police Station Road, Kanuru',
     addressLocality: 'Vijayawada',
+    addressRegion: 'Andhra Pradesh',
     addressCountry: 'IN',
   },
+  areaServed: ['Vijayawada', 'Benz Circle', 'Kanuru'],
   sameAs: [
     'https://wa.me/919876543210?text=Hi, I have a question about The Supreme Waffle',
   ],

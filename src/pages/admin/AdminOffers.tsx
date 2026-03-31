@@ -11,7 +11,7 @@ import {
   isOfferCartEligible,
 } from '../../lib/offers';
 import { supabase } from '../../lib/supabase';
-import type { Category, MenuItem, Offer, OfferDiscountType, OfferMode, OfferTriggerType } from '../../types';
+import type { Category, MenuItem, Offer, OfferCtaTargetType, OfferDiscountType, OfferMode, OfferTriggerType } from '../../types';
 
 type OfferMenuItemOption = Pick<MenuItem, 'id' | 'name' | 'price' | 'is_available'>;
 type OfferCategoryOption = Pick<Category, 'id' | 'name'>;
@@ -26,6 +26,9 @@ interface OfferForm {
   display_reward: string;
   background_image_url: string;
   cta_text: string;
+  cta_target_type: OfferCtaTargetType;
+  cta_target_category_id: string;
+  cta_target_menu_item_id: string;
   is_cart_eligible: boolean;
   offer_mode: OfferMode;
   trigger_type: OfferTriggerType;
@@ -102,6 +105,18 @@ ALTER TABLE offers
     OR qualifying_category_id IS NOT NULL
     OR qualifying_menu_item_id IS NOT NULL
   );`;
+
+const CTA_TARGET_SCHEMA_SQL = `ALTER TABLE offers
+  ADD COLUMN IF NOT EXISTS cta_target_type text,
+  ADD COLUMN IF NOT EXISTS cta_target_category_id uuid REFERENCES categories(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS cta_target_menu_item_id uuid REFERENCES menu_items(id) ON DELETE SET NULL;
+
+UPDATE offers
+SET cta_target_type = 'menu'
+WHERE cta_target_type IS NULL;
+
+ALTER TABLE offers
+  ALTER COLUMN cta_target_type SET DEFAULT 'menu';`;
 
 const OFFER_IMAGE_BUCKET = 'offer-images';
 const MAX_OFFER_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
@@ -221,6 +236,9 @@ function buildEmptyOffer(): OfferForm {
     display_reward: '',
     background_image_url: '',
     cta_text: '',
+    cta_target_type: 'menu',
+    cta_target_category_id: '',
+    cta_target_menu_item_id: '',
     is_cart_eligible: true,
     offer_mode: 'coupon',
     trigger_type: 'min_order',
@@ -249,6 +267,13 @@ function mapOfferToForm(offer: Offer): OfferForm {
     display_reward: offer.display_reward || '',
     background_image_url: offer.background_image_url || '',
     cta_text: offer.cta_text || '',
+    cta_target_type: offer.cta_target_type === 'category'
+      ? 'category'
+      : offer.cta_target_type === 'item'
+        ? 'item'
+        : 'menu',
+    cta_target_category_id: offer.cta_target_category_id || '',
+    cta_target_menu_item_id: offer.cta_target_menu_item_id || '',
     is_cart_eligible: offer.is_cart_eligible !== false,
     offer_mode: getOfferMode(offer),
     trigger_type: getOfferTriggerType(offer),
@@ -279,6 +304,9 @@ function buildPreviewOffer(offer: OfferForm): Offer {
     display_reward: offer.display_reward.trim() || null,
     background_image_url: offer.background_image_url.trim() || null,
     cta_text: offer.cta_text.trim() || null,
+    cta_target_type: offer.cta_target_type,
+    cta_target_category_id: offer.cta_target_type === 'category' ? offer.cta_target_category_id.trim() || null : null,
+    cta_target_menu_item_id: offer.cta_target_type === 'item' ? offer.cta_target_menu_item_id.trim() || null : null,
     is_cart_eligible: isCartEligible,
     offer_mode: isCartEligible ? offer.offer_mode : 'automatic',
     trigger_type: isCartEligible ? offer.trigger_type : 'min_order',
@@ -324,6 +352,13 @@ function isMissingOfferFreeItemSchema(error: { message?: string } | null) {
   );
 }
 
+function isMissingOfferCtaTargetSchema(error: { message?: string } | null) {
+  return Boolean(
+    error?.message
+    && /Could not find the '(cta_target_type|cta_target_category_id|cta_target_menu_item_id)' column of 'offers'/.test(error.message),
+  );
+}
+
 function canUseLegacyOfferSchema(offer: OfferForm) {
   return offer.is_cart_eligible
     && offer.offer_mode === 'coupon'
@@ -349,6 +384,7 @@ export default function AdminOffers() {
   const [displaySchemaAvailable, setDisplaySchemaAvailable] = useState<boolean | null>(null);
   const [rulesSchemaAvailable, setRulesSchemaAvailable] = useState<boolean | null>(null);
   const [freeItemSchemaAvailable, setFreeItemSchemaAvailable] = useState<boolean | null>(null);
+  const [ctaTargetSchemaAvailable, setCtaTargetSchemaAvailable] = useState<boolean | null>(null);
   const [offerImageUploadAvailable, setOfferImageUploadAvailable] = useState<boolean | null>(null);
   const [uploadingBackgroundImage, setUploadingBackgroundImage] = useState(false);
   const backgroundImageInputRef = useRef<HTMLInputElement | null>(null);
@@ -486,10 +522,15 @@ export default function AdminOffers() {
         ['qualifying_category_id', 'qualifying_menu_item_id', 'reward_menu_item_id', 'reward_item_quantity']
           .every((column) => Object.prototype.hasOwnProperty.call(sampleOffer, column)),
       );
+      setCtaTargetSchemaAvailable(
+        ['cta_target_type', 'cta_target_category_id', 'cta_target_menu_item_id']
+          .every((column) => Object.prototype.hasOwnProperty.call(sampleOffer, column)),
+      );
     } else {
       setDisplaySchemaAvailable(null);
       setRulesSchemaAvailable(null);
       setFreeItemSchemaAvailable(null);
+      setCtaTargetSchemaAvailable(null);
     }
 
     setLoading(false);
@@ -525,6 +566,16 @@ export default function AdminOffers() {
       && !editing.reward_menu_item_id
     ) {
       showToast('Select the free item that should be added automatically', 'error');
+      return;
+    }
+
+    if (editing.cta_target_type === 'category' && !editing.cta_target_category_id) {
+      showToast('Select the category the banner button should open', 'error');
+      return;
+    }
+
+    if (editing.cta_target_type === 'item' && !editing.cta_target_menu_item_id) {
+      showToast('Select the product the banner button should open', 'error');
       return;
     }
 
@@ -623,8 +674,37 @@ export default function AdminOffers() {
         : 1,
     };
 
+    const ctaTargetPayload = {
+      ...displayPayload,
+      cta_target_type: editing.cta_target_type,
+      cta_target_category_id: editing.cta_target_type === 'category'
+        ? editing.cta_target_category_id || null
+        : null,
+      cta_target_menu_item_id: editing.cta_target_type === 'item'
+        ? editing.cta_target_menu_item_id || null
+        : null,
+    };
+
+    const fullExtendedPayload = {
+      ...freeItemPayload,
+      cta_target_type: editing.cta_target_type,
+      cta_target_category_id: editing.cta_target_type === 'category'
+        ? editing.cta_target_category_id || null
+        : null,
+      cta_target_menu_item_id: editing.cta_target_type === 'item'
+        ? editing.cta_target_menu_item_id || null
+        : null,
+    };
+
     const savePayload = (
-      payload: typeof legacyPayload | typeof rulesPayload | typeof displayPayload | typeof legacyDisplayPayload | typeof freeItemPayload,
+      payload:
+      | typeof legacyPayload
+      | typeof rulesPayload
+      | typeof displayPayload
+      | typeof legacyDisplayPayload
+      | typeof freeItemPayload
+      | typeof ctaTargetPayload
+      | typeof fullExtendedPayload,
     ) => (
       editing.id
         ? supabase.from('offers').update(payload).eq('id', editing.id)
@@ -650,6 +730,7 @@ export default function AdminOffers() {
       || editing.background_image_url.trim()
       || editing.cta_text.trim()
     );
+    const requiresCtaTargetSchema = editing.cta_target_type !== 'menu';
     const requiresRulesSchema = !canUseLegacyOfferSchema(editing);
     const droppedDisplayFields = Boolean(
       editing.display_badge.trim()
@@ -674,6 +755,14 @@ export default function AdminOffers() {
       return;
     }
 
+    if (requiresCtaTargetSchema && ctaTargetSchemaAvailable === false) {
+      showToast(
+        'Run Supabase migration 20260401131500_add_offer_cta_targets.sql before linking banner buttons to categories or products.',
+        'error',
+      );
+      return;
+    }
+
     if (requiresRulesSchema && rulesSchemaAvailable === false) {
       showToast(
         'Run Supabase migration 20260321143000_extend_offers_for_rule_based_promotions.sql before using automatic, quantity, free add-on, or free-item offers',
@@ -682,12 +771,25 @@ export default function AdminOffers() {
       return;
     }
 
-    let { error } = await savePayload(requiresFreeItemSchema ? freeItemPayload : displayPayload);
+    const initialPayload = requiresFreeItemSchema
+      ? (requiresCtaTargetSchema ? fullExtendedPayload : freeItemPayload)
+      : (requiresCtaTargetSchema ? ctaTargetPayload : displayPayload);
+
+    let { error } = await savePayload(initialPayload);
 
     if (error && isMissingOfferFreeItemSchema(error)) {
       setFreeItemSchemaAvailable(false);
       showToast(
         'Run Supabase migration 20260331120000_add_buy_x_get_y_free_item_offers.sql before using free-item promotions.',
+        'error',
+      );
+      return;
+    }
+
+    if (error && isMissingOfferCtaTargetSchema(error)) {
+      setCtaTargetSchemaAvailable(false);
+      showToast(
+        'Run Supabase migration 20260401131500_add_offer_cta_targets.sql before linking banner buttons to categories or products.',
         'error',
       );
       return;
@@ -754,6 +856,9 @@ export default function AdminOffers() {
 
     if (!requiresFreeItemSchema || !error) {
       setFreeItemSchemaAvailable(requiresFreeItemSchema ? true : freeItemSchemaAvailable);
+    }
+    if (!requiresCtaTargetSchema || !error) {
+      setCtaTargetSchemaAvailable(requiresCtaTargetSchema ? true : ctaTargetSchemaAvailable);
     }
 
     if (usedLegacyRulesFallback) {
@@ -903,6 +1008,18 @@ export default function AdminOffers() {
         </div>
       )}
 
+      {ctaTargetSchemaAvailable === false && (
+        <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+          <p className="text-sm font-semibold text-white">
+            Banner button category and product links are disabled because the `offers` table is missing the CTA target columns.
+          </p>
+          <p className="mt-1 text-xs text-brand-text-muted">
+            Run this SQL once in the Supabase SQL Editor for the current project, then refresh this page.
+          </p>
+          <pre className="mt-3 overflow-x-auto rounded-lg bg-brand-bg/70 p-3 text-xs text-brand-text-muted">{CTA_TARGET_SCHEMA_SQL}</pre>
+        </div>
+      )}
+
       {offerImageUploadAvailable === false && (
         <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
           <p className="text-sm font-semibold text-white">
@@ -963,6 +1080,63 @@ export default function AdminOffers() {
               disabled={displaySchemaAvailable === false}
               className="input-field sm:col-span-2"
             />
+
+            <select
+              value={editing.cta_target_type}
+              onChange={(e) => setEditing({
+                ...editing,
+                cta_target_type: e.target.value as OfferCtaTargetType,
+                cta_target_category_id: e.target.value === 'category' ? editing.cta_target_category_id : '',
+                cta_target_menu_item_id: e.target.value === 'item' ? editing.cta_target_menu_item_id : '',
+              })}
+              className="input-field"
+            >
+              <option value="menu">Button Action: Open Menu</option>
+              <option value="category">Button Action: Open Category</option>
+              <option value="item">Button Action: Open Product</option>
+            </select>
+
+            {editing.cta_target_type === 'category' ? (
+              <select
+                value={editing.cta_target_category_id}
+                onChange={(e) => setEditing({
+                  ...editing,
+                  cta_target_type: 'category',
+                  cta_target_category_id: e.target.value,
+                  cta_target_menu_item_id: '',
+                })}
+                className="input-field"
+              >
+                <option value="">Open Category</option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </select>
+            ) : editing.cta_target_type === 'item' ? (
+              <select
+                value={editing.cta_target_menu_item_id}
+                onChange={(e) => setEditing({
+                  ...editing,
+                  cta_target_type: 'item',
+                  cta_target_menu_item_id: e.target.value,
+                  cta_target_category_id: '',
+                })}
+                className="input-field"
+              >
+                <option value="">Open Product</option>
+                {menuItems.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}{item.is_available ? '' : ' (Unavailable)'} - ₹{item.price}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="input-field flex items-center text-sm text-brand-text-dim">
+                Button opens the full menu page.
+              </div>
+            )}
 
             <div className="sm:col-span-2 rounded-xl border border-brand-border bg-brand-bg/20 p-3">
               <div className="flex flex-col gap-2 sm:flex-row">
@@ -1243,6 +1417,9 @@ export default function AdminOffers() {
               Button Text lets you replace `Order Now` with a custom CTA like `Claim Offer` or `Get Free Shake`.
             </p>
             <p className="mt-2 text-xs text-brand-text-dim">
+              Button Action lets the banner CTA open the full menu, a specific category, or a specific product.
+            </p>
+            <p className="mt-2 text-xs text-brand-text-dim">
               For buy-X-get-Y offers: choose `Trigger: Item Quantity`, pick `Free Item`, then choose either a specific item or a whole category to buy from before selecting the free item.
             </p>
             <p className="mt-2 text-xs text-brand-text-dim">
@@ -1256,6 +1433,11 @@ export default function AdminOffers() {
             {freeItemSchemaAvailable === false && (
               <p className="mt-2 text-xs text-amber-300">
                 Free item promotions need migration `20260331120000_add_buy_x_get_y_free_item_offers.sql` before they can be saved.
+              </p>
+            )}
+            {ctaTargetSchemaAvailable === false && (
+              <p className="mt-2 text-xs text-amber-300">
+                Banner category and product links need migration `20260401131500_add_offer_cta_targets.sql` before they can be saved.
               </p>
             )}
             {offerImageUploadAvailable === false && (
