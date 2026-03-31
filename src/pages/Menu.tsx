@@ -161,21 +161,33 @@ export default function MenuPage() {
                 className="absolute inset-0"
               >
                 {activeBannerBackgroundImage && (
-                  <img
-                    src={activeBannerBackgroundImage}
-                    alt=""
-                    className="absolute inset-0 h-full w-full object-contain object-right"
-                    onError={() => markImageFailed(activeBannerBackgroundImage)}
-                  />
+                  <>
+                    <img
+                      src={activeBannerBackgroundImage}
+                      alt=""
+                      className="absolute inset-0 h-full w-full scale-105 object-cover opacity-30 blur-[3px]"
+                      onError={() => markImageFailed(activeBannerBackgroundImage)}
+                    />
+                    <div className="absolute inset-y-0 right-0 flex w-full items-end justify-end px-3 pt-4 sm:px-6 sm:pt-6">
+                      <div className="relative flex h-full w-full max-w-[48%] items-end justify-end sm:max-w-[44%] lg:max-w-[40%]">
+                        <img
+                          src={activeBannerBackgroundImage}
+                          alt=""
+                          className="relative h-full w-full object-contain object-right-bottom drop-shadow-[0_28px_64px_rgba(0,0,0,0.5)]"
+                          onError={() => markImageFailed(activeBannerBackgroundImage)}
+                        />
+                      </div>
+                    </div>
+                  </>
                 )}
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(216,178,78,0.18),_transparent_34%),radial-gradient(circle_at_bottom_right,_rgba(255,255,255,0.06),_transparent_30%)]" />
                 <div className={`absolute inset-0 ${
                   activeBannerBackgroundImage
-                    ? 'bg-gradient-to-r from-[#11170d]/95 via-[#1b2514]/88 to-[#2c371d]/58'
+                    ? 'bg-gradient-to-r from-[#11170d]/97 via-[#182112]/90 to-[#24301a]/72'
                     : 'bg-gradient-to-r from-brand-surface via-brand-surface-light to-brand-gold/10'
                 }`} />
-                <div className="relative flex h-full flex-col justify-end gap-4 px-5 py-5 sm:px-7 sm:py-6 lg:flex-row lg:items-end lg:justify-between">
-                  <div className="max-w-xl">
+                <div className="relative flex h-full flex-col justify-end px-5 py-5 sm:px-7 sm:py-6">
+                  <div className={activeBannerBackgroundImage ? 'max-w-[68%] sm:max-w-[58%] lg:max-w-[52%]' : 'max-w-xl'}>
                     <motion.span
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -212,14 +224,21 @@ export default function MenuPage() {
                         {activeBannerReward}
                       </motion.span>
                     )}
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.3, duration: 0.35 }}
+                      className="mt-4"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => filterBarRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                        className="inline-flex w-fit items-center gap-1.5 rounded-lg bg-brand-gold px-5 py-2.5 text-[14px] font-bold text-brand-bg transition-all hover:brightness-110"
+                      >
+                        Order Now
+                      </button>
+                    </motion.div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => filterBarRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-                    className="inline-flex w-fit items-center gap-1.5 rounded-lg bg-brand-gold px-5 py-2.5 text-[14px] font-bold text-brand-bg transition-all hover:brightness-110"
-                  >
-                    Order Now
-                  </button>
                 </div>
               </motion.div>
             </AnimatePresence>
