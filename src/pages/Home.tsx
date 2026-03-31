@@ -128,7 +128,7 @@ export default function Home() {
                   <img
                     src={activeBannerBackgroundImage}
                     alt=""
-                    className="absolute inset-0 h-full w-full object-cover object-center sm:object-right"
+                    className="absolute inset-0 h-full w-full object-contain object-right"
                     onError={() => markImageFailed(activeBannerBackgroundImage)}
                   />
                 )}
