@@ -4,6 +4,23 @@ function ignoreAudioError(error: unknown) {
   void error;
 }
 
+function createAlertOutput(ctx: AudioContext) {
+  const compressor = ctx.createDynamicsCompressor();
+  compressor.threshold.setValueAtTime(-18, ctx.currentTime);
+  compressor.knee.setValueAtTime(20, ctx.currentTime);
+  compressor.ratio.setValueAtTime(10, ctx.currentTime);
+  compressor.attack.setValueAtTime(0.003, ctx.currentTime);
+  compressor.release.setValueAtTime(0.18, ctx.currentTime);
+
+  const masterGain = ctx.createGain();
+  masterGain.gain.setValueAtTime(0.95, ctx.currentTime);
+
+  compressor.connect(masterGain);
+  masterGain.connect(ctx.destination);
+
+  return compressor;
+}
+
 export function playOrderSound() {
   try {
     const ctx = audioCtx();
@@ -55,21 +72,34 @@ export function playNewOrderAlert() {
   try {
     const ctx = audioCtx();
     const now = ctx.currentTime;
+    const output = createAlertOutput(ctx);
 
     for (let r = 0; r < 3; r++) {
       const offset = r * 0.4;
       [880, 1100, 880].forEach((freq, i) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'square';
-        osc.frequency.value = freq;
-        gain.gain.setValueAtTime(0, now + offset + i * 0.1);
-        gain.gain.linearRampToValueAtTime(0.12, now + offset + i * 0.1 + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + offset + i * 0.1 + 0.15);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(now + offset + i * 0.1);
-        osc.stop(now + offset + i * 0.1 + 0.2);
+        const leadOsc = ctx.createOscillator();
+        const leadGain = ctx.createGain();
+        leadOsc.type = 'square';
+        leadOsc.frequency.value = freq;
+        leadGain.gain.setValueAtTime(0, now + offset + i * 0.1);
+        leadGain.gain.linearRampToValueAtTime(0.24, now + offset + i * 0.1 + 0.018);
+        leadGain.gain.exponentialRampToValueAtTime(0.001, now + offset + i * 0.1 + 0.18);
+        leadOsc.connect(leadGain);
+        leadGain.connect(output);
+        leadOsc.start(now + offset + i * 0.1);
+        leadOsc.stop(now + offset + i * 0.1 + 0.22);
+
+        const bodyOsc = ctx.createOscillator();
+        const bodyGain = ctx.createGain();
+        bodyOsc.type = 'triangle';
+        bodyOsc.frequency.value = freq / 2;
+        bodyGain.gain.setValueAtTime(0, now + offset + i * 0.1);
+        bodyGain.gain.linearRampToValueAtTime(0.12, now + offset + i * 0.1 + 0.02);
+        bodyGain.gain.exponentialRampToValueAtTime(0.001, now + offset + i * 0.1 + 0.2);
+        bodyOsc.connect(bodyGain);
+        bodyGain.connect(output);
+        bodyOsc.start(now + offset + i * 0.1);
+        bodyOsc.stop(now + offset + i * 0.1 + 0.24);
       });
     }
 

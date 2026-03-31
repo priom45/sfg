@@ -1930,3 +1930,106 @@ BEGIN
 END $$;
 
 -- END MIGRATION: 20260331100000_create_offer_images_storage.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260331120000_add_buy_x_get_y_free_item_offers.sql
+-- ===============================================
+
+ALTER TABLE offers
+  DROP CONSTRAINT IF EXISTS offers_discount_type_check;
+
+ALTER TABLE offers
+  ADD CONSTRAINT offers_discount_type_check
+  CHECK (discount_type IN ('percentage', 'flat', 'free_addons', 'free_item'));
+
+ALTER TABLE offers
+  ADD COLUMN IF NOT EXISTS qualifying_category_id uuid REFERENCES categories(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS qualifying_menu_item_id uuid REFERENCES menu_items(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS reward_menu_item_id uuid REFERENCES menu_items(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS reward_item_quantity integer NOT NULL DEFAULT 1;
+
+ALTER TABLE offers
+  DROP CONSTRAINT IF EXISTS offers_reward_item_quantity_check;
+
+ALTER TABLE offers
+  ADD CONSTRAINT offers_reward_item_quantity_check
+  CHECK (reward_item_quantity >= 1);
+
+ALTER TABLE offers
+  DROP CONSTRAINT IF EXISTS offers_free_item_reward_required_check;
+
+ALTER TABLE offers
+  ADD CONSTRAINT offers_free_item_reward_required_check
+  CHECK (
+    discount_type <> 'free_item'
+    OR reward_menu_item_id IS NOT NULL
+  );
+
+ALTER TABLE offers
+  DROP CONSTRAINT IF EXISTS offers_free_item_scope_required_check;
+
+ALTER TABLE offers
+  ADD CONSTRAINT offers_free_item_scope_required_check
+  CHECK (
+    discount_type <> 'free_item'
+    OR trigger_type <> 'item_quantity'
+    OR qualifying_category_id IS NOT NULL
+    OR qualifying_menu_item_id IS NOT NULL
+  );
+
+-- END MIGRATION: 20260331120000_add_buy_x_get_y_free_item_offers.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260331140000_add_offer_cta_text.sql
+-- ===============================================
+
+ALTER TABLE offers
+  ADD COLUMN IF NOT EXISTS cta_text text;
+
+-- END MIGRATION: 20260331140000_add_offer_cta_text.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260401123000_ensure_order_ids_start_at_sw_1.sql
+-- ===============================================
+
+CREATE SEQUENCE IF NOT EXISTS public.order_id_sequence
+  AS bigint
+  START WITH 1
+  INCREMENT BY 1
+  MINVALUE 1;
+
+ALTER SEQUENCE public.order_id_sequence
+  MINVALUE 1
+  START WITH 1;
+
+DO $$
+DECLARE
+  max_existing_order_number bigint;
+BEGIN
+  SELECT COALESCE(
+    MAX((substring(order_id FROM '^SW-([0-9]+)$'))::bigint),
+    0
+  )
+  INTO max_existing_order_number
+  FROM public.orders
+  WHERE substring(order_id FROM '^SW-([0-9]+)$') IS NOT NULL
+    AND (substring(order_id FROM '^SW-([0-9]+)$'))::bigint >= 1;
+
+  IF max_existing_order_number >= 1 THEN
+    PERFORM setval('public.order_id_sequence', max_existing_order_number, true);
+  ELSE
+    PERFORM setval('public.order_id_sequence', 1, false);
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.generate_order_id()
+RETURNS text AS $$
+BEGIN
+  RETURN 'SW-' || nextval('public.order_id_sequence')::text;
+END;
+$$ LANGUAGE plpgsql;
+
+ALTER TABLE public.orders
+  ALTER COLUMN order_id SET DEFAULT public.generate_order_id();
+
+-- END MIGRATION: 20260401123000_ensure_order_ids_start_at_sw_1.sql

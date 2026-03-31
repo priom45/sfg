@@ -11,7 +11,11 @@ import {
   isOfferCartEligible,
 } from '../../lib/offers';
 import { supabase } from '../../lib/supabase';
-import type { Offer, OfferDiscountType, OfferMode, OfferTriggerType } from '../../types';
+import type { Category, MenuItem, Offer, OfferDiscountType, OfferMode, OfferTriggerType } from '../../types';
+
+type OfferMenuItemOption = Pick<MenuItem, 'id' | 'name' | 'price' | 'is_available'>;
+type OfferCategoryOption = Pick<Category, 'id' | 'name'>;
+type OfferQualifyingScope = 'item' | 'category';
 
 interface OfferForm {
   id?: string;
@@ -21,6 +25,7 @@ interface OfferForm {
   display_badge: string;
   display_reward: string;
   background_image_url: string;
+  cta_text: string;
   is_cart_eligible: boolean;
   offer_mode: OfferMode;
   trigger_type: OfferTriggerType;
@@ -28,6 +33,11 @@ interface OfferForm {
   discount_value: string;
   min_order: string;
   required_item_quantity: string;
+  qualifying_scope: OfferQualifyingScope;
+  qualifying_category_id: string;
+  qualifying_menu_item_id: string;
+  reward_menu_item_id: string;
+  reward_item_quantity: string;
   valid_from: string;
   valid_until: string;
   is_active: boolean;
@@ -43,12 +53,55 @@ SET is_cart_eligible = true
 WHERE is_cart_eligible IS NULL;
 
 ALTER TABLE offers
-  ADD COLUMN IF NOT EXISTS background_image_url text;`;
+  ADD COLUMN IF NOT EXISTS background_image_url text,
+  ADD COLUMN IF NOT EXISTS cta_text text;`;
 
 const RULES_SCHEMA_SQL = `ALTER TABLE offers
   ADD COLUMN IF NOT EXISTS offer_mode text NOT NULL DEFAULT 'coupon',
   ADD COLUMN IF NOT EXISTS trigger_type text NOT NULL DEFAULT 'min_order',
   ADD COLUMN IF NOT EXISTS required_item_quantity integer;`;
+
+const FREE_ITEM_SCHEMA_SQL = `ALTER TABLE offers
+  DROP CONSTRAINT IF EXISTS offers_discount_type_check;
+
+ALTER TABLE offers
+  ADD CONSTRAINT offers_discount_type_check
+  CHECK (discount_type IN ('percentage', 'flat', 'free_addons', 'free_item'));
+
+ALTER TABLE offers
+  ADD COLUMN IF NOT EXISTS qualifying_category_id uuid REFERENCES categories(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS qualifying_menu_item_id uuid REFERENCES menu_items(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS reward_menu_item_id uuid REFERENCES menu_items(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS reward_item_quantity integer NOT NULL DEFAULT 1;
+
+ALTER TABLE offers
+  DROP CONSTRAINT IF EXISTS offers_reward_item_quantity_check;
+
+ALTER TABLE offers
+  ADD CONSTRAINT offers_reward_item_quantity_check
+  CHECK (reward_item_quantity >= 1);
+
+ALTER TABLE offers
+  DROP CONSTRAINT IF EXISTS offers_free_item_reward_required_check;
+
+ALTER TABLE offers
+  ADD CONSTRAINT offers_free_item_reward_required_check
+  CHECK (
+    discount_type <> 'free_item'
+    OR reward_menu_item_id IS NOT NULL
+  );
+
+ALTER TABLE offers
+  DROP CONSTRAINT IF EXISTS offers_free_item_scope_required_check;
+
+ALTER TABLE offers
+  ADD CONSTRAINT offers_free_item_scope_required_check
+  CHECK (
+    discount_type <> 'free_item'
+    OR trigger_type <> 'item_quantity'
+    OR qualifying_category_id IS NOT NULL
+    OR qualifying_menu_item_id IS NOT NULL
+  );`;
 
 const OFFER_IMAGE_BUCKET = 'offer-images';
 const MAX_OFFER_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
@@ -167,6 +220,7 @@ function buildEmptyOffer(): OfferForm {
     display_badge: '',
     display_reward: '',
     background_image_url: '',
+    cta_text: '',
     is_cart_eligible: true,
     offer_mode: 'coupon',
     trigger_type: 'min_order',
@@ -174,6 +228,11 @@ function buildEmptyOffer(): OfferForm {
     discount_value: '10',
     min_order: '200',
     required_item_quantity: '3',
+    qualifying_scope: 'item',
+    qualifying_category_id: '',
+    qualifying_menu_item_id: '',
+    reward_menu_item_id: '',
+    reward_item_quantity: '1',
     valid_from: toDateTimeLocalValue(validFrom.toISOString()),
     valid_until: toDateTimeLocalValue(validUntil.toISOString()),
     is_active: true,
@@ -189,6 +248,7 @@ function mapOfferToForm(offer: Offer): OfferForm {
     display_badge: offer.display_badge || '',
     display_reward: offer.display_reward || '',
     background_image_url: offer.background_image_url || '',
+    cta_text: offer.cta_text || '',
     is_cart_eligible: offer.is_cart_eligible !== false,
     offer_mode: getOfferMode(offer),
     trigger_type: getOfferTriggerType(offer),
@@ -196,6 +256,11 @@ function mapOfferToForm(offer: Offer): OfferForm {
     discount_value: String(offer.discount_value),
     min_order: String(offer.min_order),
     required_item_quantity: String(offer.required_item_quantity || 3),
+    qualifying_scope: offer.qualifying_category_id ? 'category' : 'item',
+    qualifying_category_id: offer.qualifying_category_id || '',
+    qualifying_menu_item_id: offer.qualifying_menu_item_id || '',
+    reward_menu_item_id: offer.reward_menu_item_id || '',
+    reward_item_quantity: String(offer.reward_item_quantity || 1),
     valid_from: toDateTimeLocalValue(offer.valid_from),
     valid_until: toDateTimeLocalValue(offer.valid_until),
     is_active: offer.is_active,
@@ -213,15 +278,22 @@ function buildPreviewOffer(offer: OfferForm): Offer {
     display_badge: offer.display_badge.trim() || null,
     display_reward: offer.display_reward.trim() || null,
     background_image_url: offer.background_image_url.trim() || null,
+    cta_text: offer.cta_text.trim() || null,
     is_cart_eligible: isCartEligible,
     offer_mode: isCartEligible ? offer.offer_mode : 'automatic',
     trigger_type: isCartEligible ? offer.trigger_type : 'min_order',
     discount_type: isCartEligible ? offer.discount_type : 'flat',
-    discount_value: isCartEligible && offer.discount_type !== 'free_addons' ? parseFloat(offer.discount_value) || 0 : 0,
-    min_order: isCartEligible && offer.trigger_type === 'min_order' ? parseFloat(offer.min_order) || 0 : 0,
+    discount_value: isCartEligible && !['free_addons', 'free_item'].includes(offer.discount_type)
+      ? parseFloat(offer.discount_value) || 0
+      : 0,
+    min_order: isCartEligible ? parseFloat(offer.min_order) || 0 : 0,
     required_item_quantity: isCartEligible && offer.trigger_type === 'item_quantity'
       ? Math.max(1, parseInt(offer.required_item_quantity, 10) || 1)
       : null,
+    qualifying_category_id: isCartEligible ? offer.qualifying_category_id.trim() || null : null,
+    qualifying_menu_item_id: isCartEligible ? offer.qualifying_menu_item_id.trim() || null : null,
+    reward_menu_item_id: isCartEligible ? offer.reward_menu_item_id.trim() || null : null,
+    reward_item_quantity: isCartEligible ? Math.max(1, parseInt(offer.reward_item_quantity, 10) || 1) : 1,
     valid_from: toIsoDateTime(offer.valid_from),
     valid_until: toIsoDateTime(offer.valid_until),
     is_active: offer.is_active,
@@ -238,7 +310,17 @@ function isMissingOfferRulesSchema(error: { message?: string } | null) {
 function isMissingOfferDisplaySchema(error: { message?: string } | null) {
   return Boolean(
     error?.message
-    && /Could not find the '(display_badge|display_reward|background_image_url|is_cart_eligible)' column of 'offers'/.test(error.message),
+    && /Could not find the '(display_badge|display_reward|background_image_url|cta_text|is_cart_eligible)' column of 'offers'/.test(error.message),
+  );
+}
+
+function isMissingOfferFreeItemSchema(error: { message?: string } | null) {
+  return Boolean(
+    error?.message
+    && (
+      /Could not find the '(qualifying_category_id|qualifying_menu_item_id|reward_menu_item_id|reward_item_quantity)' column of 'offers'/.test(error.message)
+      || /offers_discount_type_check|offers_reward_item_quantity_check|offers_free_item_reward_required_check|offers_free_item_scope_required_check/.test(error.message)
+    ),
   );
 }
 
@@ -246,23 +328,27 @@ function canUseLegacyOfferSchema(offer: OfferForm) {
   return offer.is_cart_eligible
     && offer.offer_mode === 'coupon'
     && offer.trigger_type === 'min_order'
-    && offer.discount_type !== 'free_addons';
+    && !['free_addons', 'free_item'].includes(offer.discount_type);
 }
 
 function canUseLegacyOfferDisplaySchema(offer: OfferForm) {
   return offer.is_cart_eligible
     && !offer.display_badge.trim()
     && !offer.display_reward.trim()
-    && !offer.background_image_url.trim();
+    && !offer.background_image_url.trim()
+    && !offer.cta_text.trim();
 }
 
 export default function AdminOffers() {
   const [offers, setOffers] = useState<Offer[]>([]);
+  const [categories, setCategories] = useState<OfferCategoryOption[]>([]);
+  const [menuItems, setMenuItems] = useState<OfferMenuItemOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<OfferForm | null>(null);
   const [failedImageUrls, setFailedImageUrls] = useState<Record<string, true>>({});
   const [displaySchemaAvailable, setDisplaySchemaAvailable] = useState<boolean | null>(null);
   const [rulesSchemaAvailable, setRulesSchemaAvailable] = useState<boolean | null>(null);
+  const [freeItemSchemaAvailable, setFreeItemSchemaAvailable] = useState<boolean | null>(null);
   const [offerImageUploadAvailable, setOfferImageUploadAvailable] = useState<boolean | null>(null);
   const [uploadingBackgroundImage, setUploadingBackgroundImage] = useState(false);
   const backgroundImageInputRef = useRef<HTMLInputElement | null>(null);
@@ -349,32 +435,61 @@ export default function AdminOffers() {
   }, [uploadOfferBackgroundImage]);
 
   const loadOffers = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('offers')
-      .select('*')
-      .order('is_active', { ascending: false })
-      .order('created_at', { ascending: false });
+    const [
+      { data, error },
+      { data: menuItemsData, error: menuItemsError },
+      { data: categoriesData, error: categoriesError },
+    ] = await Promise.all([
+      supabase
+        .from('offers')
+        .select('*')
+        .order('is_active', { ascending: false })
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('menu_items')
+        .select('id, name, price, is_available')
+        .order('display_order'),
+      supabase
+        .from('categories')
+        .select('id, name')
+        .order('display_order'),
+    ]);
 
     if (error) {
       showToast(error.message || 'Failed to load offers', 'error');
     }
 
+    if (menuItemsError) {
+      showToast(menuItemsError.message || 'Failed to load menu items', 'error');
+    }
+
+    if (categoriesError) {
+      showToast(categoriesError.message || 'Failed to load categories', 'error');
+    }
+
     const loadedOffers = data || [];
+    setMenuItems(menuItemsData || []);
+    setCategories(categoriesData || []);
     setOffers(loadedOffers);
 
     if (loadedOffers.length > 0) {
       const sampleOffer = loadedOffers[0] as Record<string, unknown>;
       setDisplaySchemaAvailable(
-        ['display_badge', 'display_reward', 'background_image_url', 'is_cart_eligible']
+        ['display_badge', 'display_reward', 'background_image_url', 'cta_text', 'is_cart_eligible']
           .every((column) => Object.prototype.hasOwnProperty.call(sampleOffer, column)),
       );
       setRulesSchemaAvailable(
         ['offer_mode', 'trigger_type', 'required_item_quantity']
           .every((column) => Object.prototype.hasOwnProperty.call(sampleOffer, column)),
       );
+      setFreeItemSchemaAvailable(
+        ['qualifying_category_id', 'qualifying_menu_item_id', 'reward_menu_item_id', 'reward_item_quantity']
+          .every((column) => Object.prototype.hasOwnProperty.call(sampleOffer, column)),
+      );
     } else {
       setDisplaySchemaAvailable(null);
       setRulesSchemaAvailable(null);
+      setFreeItemSchemaAvailable(null);
     }
 
     setLoading(false);
@@ -404,6 +519,43 @@ export default function AdminOffers() {
       return;
     }
 
+    if (
+      editing.is_cart_eligible
+      && editing.discount_type === 'free_item'
+      && !editing.reward_menu_item_id
+    ) {
+      showToast('Select the free item that should be added automatically', 'error');
+      return;
+    }
+
+    if (
+      editing.is_cart_eligible
+      && editing.discount_type === 'free_item'
+      && editing.trigger_type === 'item_quantity'
+      && !editing.qualifying_menu_item_id
+      && !editing.qualifying_category_id
+    ) {
+      showToast('Select the item or category customers must buy to unlock the free item', 'error');
+      return;
+    }
+
+    if (
+      editing.is_cart_eligible
+      && editing.discount_type === 'free_item'
+      && (!Number.isFinite(Number(editing.reward_item_quantity)) || Number(editing.reward_item_quantity) < 1)
+    ) {
+      showToast('Free item quantity must be at least 1', 'error');
+      return;
+    }
+
+    if (
+      editing.is_cart_eligible
+      && (!Number.isFinite(Number(editing.min_order)) || Number(editing.min_order) < 0)
+    ) {
+      showToast('Minimum order value cannot be negative', 'error');
+      return;
+    }
+
     const validFrom = toIsoDateTime(editing.valid_from);
     const validUntil = toIsoDateTime(editing.valid_until);
     if (new Date(validUntil) <= new Date(validFrom)) {
@@ -419,12 +571,10 @@ export default function AdminOffers() {
       description: editing.description.trim(),
       code: resolvedOfferMode === 'coupon' ? editing.code.trim().toUpperCase() : null,
       discount_type: editing.is_cart_eligible ? editing.discount_type : 'flat',
-      discount_value: editing.is_cart_eligible && editing.discount_type !== 'free_addons'
+      discount_value: editing.is_cart_eligible && !['free_addons', 'free_item'].includes(editing.discount_type)
         ? parseFloat(editing.discount_value) || 0
         : 0,
-      min_order: editing.is_cart_eligible && resolvedTriggerType === 'min_order'
-        ? parseFloat(editing.min_order) || 0
-        : 0,
+      min_order: editing.is_cart_eligible ? Math.max(0, parseFloat(editing.min_order) || 0) : 0,
       valid_from: validFrom,
       valid_until: validUntil,
       is_active: editing.is_active,
@@ -444,6 +594,7 @@ export default function AdminOffers() {
       display_badge: editing.display_badge.trim() || null,
       display_reward: editing.display_reward.trim() || null,
       background_image_url: editing.background_image_url.trim() || null,
+      cta_text: editing.cta_text.trim() || null,
       is_cart_eligible: editing.is_cart_eligible,
     };
 
@@ -452,11 +603,28 @@ export default function AdminOffers() {
       display_badge: editing.display_badge.trim() || null,
       display_reward: editing.display_reward.trim() || null,
       background_image_url: editing.background_image_url.trim() || null,
+      cta_text: editing.cta_text.trim() || null,
       is_cart_eligible: editing.is_cart_eligible,
     };
 
+    const freeItemPayload = {
+      ...displayPayload,
+      qualifying_category_id: editing.is_cart_eligible && resolvedTriggerType === 'item_quantity'
+        ? editing.qualifying_category_id || null
+        : null,
+      qualifying_menu_item_id: editing.is_cart_eligible && resolvedTriggerType === 'item_quantity'
+        ? editing.qualifying_menu_item_id || null
+        : null,
+      reward_menu_item_id: editing.is_cart_eligible && editing.discount_type === 'free_item'
+        ? editing.reward_menu_item_id || null
+        : null,
+      reward_item_quantity: editing.is_cart_eligible && editing.discount_type === 'free_item'
+        ? Math.max(1, parseInt(editing.reward_item_quantity, 10) || 1)
+        : 1,
+    };
+
     const savePayload = (
-      payload: typeof legacyPayload | typeof rulesPayload | typeof displayPayload | typeof legacyDisplayPayload,
+      payload: typeof legacyPayload | typeof rulesPayload | typeof displayPayload | typeof legacyDisplayPayload | typeof freeItemPayload,
     ) => (
       editing.id
         ? supabase.from('offers').update(payload).eq('id', editing.id)
@@ -465,22 +633,42 @@ export default function AdminOffers() {
 
     let usedLegacyDisplayFallback = false;
     let usedLegacyRulesFallback = false;
+    const requiresFreeItemSchema = Boolean(
+      editing.is_cart_eligible
+      && (
+        editing.discount_type === 'free_item'
+        || editing.qualifying_category_id
+        || editing.qualifying_menu_item_id
+        || editing.reward_menu_item_id
+        || parseInt(editing.reward_item_quantity, 10) > 1
+      )
+    );
     const requiresDisplaySchema = Boolean(
       !editing.is_cart_eligible
       || editing.display_badge.trim()
       || editing.display_reward.trim()
       || editing.background_image_url.trim()
+      || editing.cta_text.trim()
     );
     const requiresRulesSchema = !canUseLegacyOfferSchema(editing);
     const droppedDisplayFields = Boolean(
       editing.display_badge.trim()
       || editing.display_reward.trim()
-      || editing.background_image_url.trim(),
+      || editing.background_image_url.trim()
+      || editing.cta_text.trim()
     );
 
     if (requiresDisplaySchema && displaySchemaAvailable === false) {
       showToast(
-        'Run migrations 20260330120000 and 20260330123000 before saving background images, custom labels, or display-only promos.',
+        'Run migrations 20260330120000, 20260330123000, and 20260331140000 before saving background images, CTA text, custom labels, or display-only promos.',
+        'error',
+      );
+      return;
+    }
+
+    if (requiresFreeItemSchema && freeItemSchemaAvailable === false) {
+      showToast(
+        'Run Supabase migration 20260331120000_add_buy_x_get_y_free_item_offers.sql before using free-item promotions.',
         'error',
       );
       return;
@@ -488,19 +676,28 @@ export default function AdminOffers() {
 
     if (requiresRulesSchema && rulesSchemaAvailable === false) {
       showToast(
-        'Run Supabase migration 20260321143000_extend_offers_for_rule_based_promotions.sql before using automatic, quantity, or free add-on offers',
+        'Run Supabase migration 20260321143000_extend_offers_for_rule_based_promotions.sql before using automatic, quantity, free add-on, or free-item offers',
         'error',
       );
       return;
     }
 
-    let { error } = await savePayload(displayPayload);
+    let { error } = await savePayload(requiresFreeItemSchema ? freeItemPayload : displayPayload);
+
+    if (error && isMissingOfferFreeItemSchema(error)) {
+      setFreeItemSchemaAvailable(false);
+      showToast(
+        'Run Supabase migration 20260331120000_add_buy_x_get_y_free_item_offers.sql before using free-item promotions.',
+        'error',
+      );
+      return;
+    }
 
     if (error && isMissingOfferDisplaySchema(error)) {
       setDisplaySchemaAvailable(false);
       if (requiresDisplaySchema || !canUseLegacyOfferDisplaySchema(editing)) {
         showToast(
-          'Run migrations 20260330120000 and 20260330123000 before saving background images, custom labels, or display-only promos.',
+          'Run migrations 20260330120000, 20260330123000, and 20260331140000 before saving background images, CTA text, custom labels, or display-only promos.',
           'error',
         );
         return;
@@ -514,7 +711,7 @@ export default function AdminOffers() {
       setRulesSchemaAvailable(false);
       if (!canUseLegacyOfferSchema(editing)) {
         showToast(
-          'Run Supabase migration 20260321143000_extend_offers_for_rule_based_promotions.sql before using automatic, quantity, or free add-on offers',
+          'Run Supabase migration 20260321143000_extend_offers_for_rule_based_promotions.sql before using automatic, quantity, free add-on, or free-item offers',
           'error',
         );
         return;
@@ -531,7 +728,7 @@ export default function AdminOffers() {
         setDisplaySchemaAvailable(false);
         if (requiresDisplaySchema || !canUseLegacyOfferDisplaySchema(editing)) {
           showToast(
-            'Run migrations 20260330120000 and 20260330123000 before saving background images, custom labels, or display-only promos.',
+            'Run migrations 20260330120000, 20260330123000, and 20260331140000 before saving background images, CTA text, custom labels, or display-only promos.',
             'error',
           );
           return;
@@ -555,13 +752,17 @@ export default function AdminOffers() {
       setRulesSchemaAvailable(true);
     }
 
+    if (!requiresFreeItemSchema || !error) {
+      setFreeItemSchemaAvailable(requiresFreeItemSchema ? true : freeItemSchemaAvailable);
+    }
+
     if (usedLegacyRulesFallback) {
       showToast('Offer saved. Run the latest offers migration to enable advanced offer rules.');
     } else if (usedLegacyDisplayFallback) {
       showToast(
         droppedDisplayFields
-          ? 'Offer updated, but display-only fields were skipped because migrations 20260330120000 and 20260330123000 are missing.'
-          : 'Offer saved. Run the latest offers display migrations to enable promo-only cards and custom labels.',
+          ? 'Offer updated, but display-only fields were skipped because migrations 20260330120000, 20260330123000, and 20260331140000 are missing.'
+          : 'Offer saved. Run the latest offers display migrations to enable promo-only cards, CTA text, and custom labels.',
       );
     } else {
       showToast(editing.id ? 'Offer updated' : 'Offer added');
@@ -669,7 +870,7 @@ export default function AdminOffers() {
       {displaySchemaAvailable === false && (
         <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
           <p className="text-sm font-semibold text-white">
-            Background image URLs and custom offer labels are disabled because the `offers` table is missing the new display columns.
+            Background image URLs, CTA text, and custom offer labels are disabled because the `offers` table is missing the new display columns.
           </p>
           <p className="mt-1 text-xs text-brand-text-muted">
             Run this SQL once in the Supabase SQL Editor for the current project, then refresh this page.
@@ -687,6 +888,18 @@ export default function AdminOffers() {
             Run this SQL once in the Supabase SQL Editor for the current project, then refresh this page.
           </p>
           <pre className="mt-3 overflow-x-auto rounded-lg bg-brand-bg/70 p-3 text-xs text-brand-text-muted">{RULES_SCHEMA_SQL}</pre>
+        </div>
+      )}
+
+      {freeItemSchemaAvailable === false && (
+        <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+          <p className="text-sm font-semibold text-white">
+            Buy-X-get-Y free item offers are disabled because the `offers` table is missing the new item-reward columns.
+          </p>
+          <p className="mt-1 text-xs text-brand-text-muted">
+            Run this SQL once in the Supabase SQL Editor for the current project, then refresh this page.
+          </p>
+          <pre className="mt-3 overflow-x-auto rounded-lg bg-brand-bg/70 p-3 text-xs text-brand-text-muted">{FREE_ITEM_SCHEMA_SQL}</pre>
         </div>
       )}
 
@@ -741,6 +954,14 @@ export default function AdminOffers() {
               onChange={(e) => setEditing({ ...editing, display_reward: e.target.value })}
               disabled={displaySchemaAvailable === false}
               className="input-field"
+            />
+
+            <input
+              placeholder="Button Text (optional, default: Order Now)"
+              value={editing.cta_text}
+              onChange={(e) => setEditing({ ...editing, cta_text: e.target.value })}
+              disabled={displaySchemaAvailable === false}
+              className="input-field sm:col-span-2"
             />
 
             <div className="sm:col-span-2 rounded-xl border border-brand-border bg-brand-bg/20 p-3">
@@ -823,15 +1044,22 @@ export default function AdminOffers() {
 
                 <select
                   value={editing.discount_type}
-                  onChange={(e) => setEditing({ ...editing, discount_type: e.target.value as OfferDiscountType })}
+                  onChange={(e) => setEditing({
+                    ...editing,
+                    discount_type: e.target.value as OfferDiscountType,
+                    discount_value: e.target.value === 'free_item' || e.target.value === 'free_addons'
+                      ? '0'
+                      : editing.discount_value,
+                  })}
                   className="input-field"
                 >
                   <option value="percentage">Percentage Discount</option>
                   <option value="flat">Flat Amount Discount</option>
                   <option value="free_addons">Free Add-Ons</option>
+                  <option value="free_item">Free Item</option>
                 </select>
 
-                {editing.discount_type !== 'free_addons' && (
+                {editing.discount_type !== 'free_addons' && editing.discount_type !== 'free_item' && (
                   <input
                     placeholder="Discount Value"
                     type="number"
@@ -850,14 +1078,118 @@ export default function AdminOffers() {
                     className="input-field"
                   />
                 ) : (
-                  <input
-                    placeholder="Required Item Quantity"
-                    type="number"
-                    min={1}
-                    value={editing.required_item_quantity}
-                    onChange={(e) => setEditing({ ...editing, required_item_quantity: e.target.value })}
-                    className="input-field"
-                  />
+                  <>
+                    <input
+                      placeholder={editing.discount_type === 'free_item' ? 'Buy Quantity' : 'Required Item Quantity'}
+                      type="number"
+                      min={1}
+                      value={editing.required_item_quantity}
+                      onChange={(e) => setEditing({ ...editing, required_item_quantity: e.target.value })}
+                      className="input-field"
+                    />
+                    <input
+                      placeholder="Minimum Order Value (optional)"
+                      type="number"
+                      min={0}
+                      value={editing.min_order}
+                      onChange={(e) => setEditing({ ...editing, min_order: e.target.value })}
+                      className="input-field"
+                    />
+                  </>
+                )}
+
+                {editing.discount_type === 'free_item' && editing.trigger_type === 'item_quantity' && (
+                  <>
+                    <select
+                      value={editing.qualifying_scope}
+                      onChange={(e) => {
+                        const nextScope = e.target.value as OfferQualifyingScope;
+                        setEditing((current) => {
+                          if (!current) return current;
+                          return {
+                            ...current,
+                            qualifying_scope: nextScope,
+                            qualifying_category_id: nextScope === 'category' ? current.qualifying_category_id : '',
+                            qualifying_menu_item_id: nextScope === 'item' ? current.qualifying_menu_item_id : '',
+                          };
+                        });
+                      }}
+                      className="input-field"
+                    >
+                      <option value="item">Buy From: Specific Item</option>
+                      <option value="category">Buy From: Any Item In Category</option>
+                    </select>
+
+                    {editing.qualifying_scope === 'category' ? (
+                      <select
+                        value={editing.qualifying_category_id}
+                        onChange={(e) => setEditing((current) => {
+                          if (!current) return current;
+                          return {
+                            ...current,
+                            qualifying_scope: 'category',
+                            qualifying_category_id: e.target.value,
+                            qualifying_menu_item_id: '',
+                          };
+                        })}
+                        className="input-field"
+                      >
+                        <option value="">Buy Category</option>
+                        {categories.map((category) => (
+                          <option key={category.id} value={category.id}>
+                            {category.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <select
+                        value={editing.qualifying_menu_item_id}
+                        onChange={(e) => setEditing((current) => {
+                          if (!current) return current;
+                          return {
+                            ...current,
+                            qualifying_scope: 'item',
+                            qualifying_menu_item_id: e.target.value,
+                            qualifying_category_id: '',
+                          };
+                        })}
+                        className="input-field"
+                      >
+                        <option value="">Buy Item</option>
+                        {menuItems.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name}{item.is_available ? '' : ' (Unavailable)'} - ₹{item.price}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </>
+                )}
+
+                {editing.discount_type === 'free_item' && (
+                  <>
+                    <select
+                      value={editing.reward_menu_item_id}
+                      onChange={(e) => setEditing({ ...editing, reward_menu_item_id: e.target.value })}
+                      className="input-field"
+                    >
+                      <option value="">Free Item</option>
+                      {menuItems.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}{item.is_available ? '' : ' (Unavailable)'} - ₹{item.price}
+                        </option>
+                      ))}
+                    </select>
+
+                    <input
+                      placeholder="Free Quantity"
+                      type="number"
+                      min={1}
+                      value={editing.reward_item_quantity}
+                      onChange={(e) => setEditing({ ...editing, reward_item_quantity: e.target.value })}
+                      className="input-field"
+                    />
+                  </>
                 )}
               </>
             )}
@@ -907,9 +1239,23 @@ export default function AdminOffers() {
             <p className="text-xs text-brand-text-dim">
               Add a background image URL or upload an image to show promo art behind the slide text on Home and Menu.
             </p>
+            <p className="mt-2 text-xs text-brand-text-dim">
+              Button Text lets you replace `Order Now` with a custom CTA like `Claim Offer` or `Get Free Shake`.
+            </p>
+            <p className="mt-2 text-xs text-brand-text-dim">
+              For buy-X-get-Y offers: choose `Trigger: Item Quantity`, pick `Free Item`, then choose either a specific item or a whole category to buy from before selecting the free item.
+            </p>
+            <p className="mt-2 text-xs text-brand-text-dim">
+              You can also set `Minimum Order Value` together with `Trigger: Item Quantity` if the free item should unlock only after both conditions are met.
+            </p>
             {displaySchemaAvailable === false && (
               <p className="mt-2 text-xs text-amber-300">
-                The background image field is currently disabled until the display-field migration is applied in Supabase.
+                Background image, CTA text, and label fields are currently disabled until the display-field migration is applied in Supabase.
+              </p>
+            )}
+            {freeItemSchemaAvailable === false && (
+              <p className="mt-2 text-xs text-amber-300">
+                Free item promotions need migration `20260331120000_add_buy_x_get_y_free_item_offers.sql` before they can be saved.
               </p>
             )}
             {offerImageUploadAvailable === false && (
@@ -956,6 +1302,11 @@ export default function AdminOffers() {
                 {previewRewardLabel && (
                   <p className="relative mt-3 text-lg font-black tracking-tight text-brand-gold">{previewRewardLabel}</p>
                 )}
+                <div className="relative mt-3">
+                  <span className="inline-flex rounded-lg bg-brand-gold px-3 py-1.5 text-xs font-bold text-brand-bg">
+                    {previewOffer.cta_text?.trim() || 'Order Now'}
+                  </span>
+                </div>
               </div>
             )}
           </div>

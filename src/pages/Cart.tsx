@@ -12,8 +12,10 @@ import {
   getOfferDiscountAmount,
   getOfferEligibilityError,
   getOfferMode,
+  getOfferRewardItems,
   getOfferRuleSummary,
   isOfferCartEligible,
+  type OfferRewardItem,
 } from '../lib/offers';
 import { customerSupabase } from '../lib/supabase';
 import { readCheckoutSuccessOrder, storeCheckoutSuccessOrder } from '../lib/checkoutSuccess';
@@ -29,6 +31,12 @@ import CustomizationModal from '../components/CustomizationModal';
 
 const SESSION_KEYWORDS = ['session expired', 'sign in again', 'please sign in'];
 const TAKEAWAY_CHARGE = 10;
+
+type OfferMenuCatalogItem = Pick<MenuItem, 'id' | 'name' | 'image_url' | 'price' | 'category_id'> & { is_available: boolean };
+
+function getPromoRewardSummary(items: OfferRewardItem[]) {
+  return items.map((item) => `${item.quantity}x ${item.item_name}`).join(', ');
+}
 
 export default function CartPage() {
   const { items, subtotal, itemCount, removeItem, updateQuantity, clearCart, addItem } = useCart();
@@ -52,6 +60,8 @@ export default function CartPage() {
     quantity: number;
     customizations: SelectedCustomization[];
   } | null>(null);
+  const [offerMenuItemsById, setOfferMenuItemsById] = useState<Record<string, OfferMenuCatalogItem>>({});
+  const [offerCategoryNamesById, setOfferCategoryNamesById] = useState<Record<string, string>>({});
   const [customizationAvailability, setCustomizationAvailability] = useState<CustomizationAvailability | null>(null);
   const pendingSuccessOrderId = readCheckoutSuccessOrder();
 
@@ -83,15 +93,37 @@ export default function CartPage() {
 
   async function loadActiveOffers() {
     const now = new Date().toISOString();
-    const { data } = await customerSupabase
-      .from('offers')
-      .select('*')
-      .eq('is_active', true)
-      .lte('valid_from', now)
-      .gte('valid_until', now)
-      .order('created_at', { ascending: false });
+    const [{ data: offersData }, { data: menuItemsData }, { data: categoriesData }] = await Promise.all([
+      customerSupabase
+        .from('offers')
+        .select('*')
+        .eq('is_active', true)
+        .lte('valid_from', now)
+        .gte('valid_until', now)
+        .order('created_at', { ascending: false }),
+      customerSupabase
+        .from('menu_items')
+        .select('id, name, image_url, price, is_available, category_id'),
+      customerSupabase
+        .from('categories')
+        .select('id, name'),
+    ]);
 
-    setActiveOffers((data || []).filter(isOfferCartEligible));
+    setActiveOffers((offersData || []).filter(isOfferCartEligible));
+    setOfferMenuItemsById(
+      (menuItemsData || []).reduce<Record<string, OfferMenuCatalogItem>>((acc, item) => {
+        if (item.is_available !== false) {
+          acc[item.id] = item;
+        }
+        return acc;
+      }, {}),
+    );
+    setOfferCategoryNamesById(
+      (categoriesData || []).reduce<Record<string, string>>((acc, category) => {
+        acc[category.id] = category.name;
+        return acc;
+      }, {}),
+    );
   }
 
   async function applyCoupon() {
@@ -111,6 +143,9 @@ export default function CartPage() {
       subtotal,
       itemCount,
       addOnTotal: getCartAddOnTotal(items),
+      items,
+      menuItemsById: offerMenuItemsById,
+      categoryNamesById: offerCategoryNamesById,
     });
 
     if (offerEligibilityError) {
@@ -124,15 +159,42 @@ export default function CartPage() {
   }
 
   const addOnTotal = getCartAddOnTotal(items);
-  const pricingContext = { subtotal, itemCount, addOnTotal };
+  const pricingContext = {
+    subtotal,
+    itemCount,
+    addOnTotal,
+    items,
+    menuItemsById: offerMenuItemsById,
+    categoryNamesById: offerCategoryNamesById,
+  };
+  const couponRewardItems = appliedOffer ? getOfferRewardItems(appliedOffer, pricingContext) : [];
   const couponDiscount = appliedOffer ? getOfferDiscountAmount(appliedOffer, pricingContext) : 0;
   const automaticOffer = getBestAutomaticOffer(activeOffers, pricingContext);
   const automaticDiscount = automaticOffer?.discountAmount || 0;
+  const automaticRewardItems = automaticOffer?.freeItems || [];
+  const promoRewardItems = [...couponRewardItems, ...automaticRewardItems];
+  const checkoutItems = [
+    ...items.map((item) => ({
+      menu_item_id: item.menu_item.id,
+      item_name: item.menu_item.name,
+      quantity: item.quantity,
+      unit_price: item.menu_item.price,
+      customizations: item.customizations,
+    })),
+    ...promoRewardItems.map((item) => ({
+      menu_item_id: item.menu_item_id,
+      item_name: `${item.item_name} (Free)`,
+      quantity: item.quantity,
+      unit_price: 0,
+      customizations: [] as SelectedCustomization[],
+    })),
+  ];
   const featuredAutomaticOffer = automaticOffer?.offer || activeOffers.find((offer) => getOfferMode(offer) === 'automatic') || null;
   const discount = Math.min(subtotal, couponDiscount + automaticDiscount);
   const takeawayFee = pickupOption === 'takeaway' ? TAKEAWAY_CHARGE : 0;
   const total = Math.max(0, subtotal - discount) + takeawayFee;
   const isFreeOrder = total <= 0;
+  const automaticOfferApplied = automaticDiscount > 0 || automaticRewardItems.length > 0;
   const serviceModeLabel = getServiceModeLabel({ order_type: 'pickup', pickup_option: pickupOption });
 
   useEffect(() => {
@@ -150,6 +212,9 @@ export default function CartPage() {
       subtotal,
       itemCount,
       addOnTotal,
+      items,
+      menuItemsById: offerMenuItemsById,
+      categoryNamesById: offerCategoryNamesById,
     });
 
     if (offerEligibilityError) {
@@ -161,7 +226,7 @@ export default function CartPage() {
     if (latestOffer !== appliedOffer) {
       setAppliedOffer(latestOffer);
     }
-  }, [activeOffers, addOnTotal, appliedOffer, itemCount, subtotal]);
+  }, [activeOffers, addOnTotal, appliedOffer, itemCount, items, offerCategoryNamesById, offerMenuItemsById, subtotal]);
 
   function getCustomerEmail() {
     return profile?.email?.trim() || user?.email?.trim() || '';
@@ -190,13 +255,7 @@ export default function CartPage() {
       subtotal,
       discount,
       total,
-      items: items.map((item) => ({
-        menu_item_id: item.menu_item.id,
-        item_name: item.menu_item.name,
-        quantity: item.quantity,
-        unit_price: item.menu_item.price,
-        customizations: item.customizations,
-      })),
+      items: checkoutItems,
     });
 
     try {
@@ -327,13 +386,7 @@ export default function CartPage() {
         discount,
         total,
         paymentMethod,
-        items: items.map((item) => ({
-          menu_item_id: item.menu_item.id,
-          item_name: item.menu_item.name,
-          quantity: item.quantity,
-          unit_price: item.menu_item.price,
-          customizations: item.customizations,
-        })),
+        items: checkoutItems,
       });
 
       storeCheckoutSuccessOrder(order.appOrderId);
@@ -509,6 +562,40 @@ export default function CartPage() {
           })}
           </AnimatePresence>
 
+          {promoRewardItems.length > 0 && (
+            <div className="space-y-2">
+              {promoRewardItems.map((item) => (
+                <div
+                  key={`${item.offer_id}-${item.menu_item_id}`}
+                  className="flex gap-3 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3.5"
+                >
+                  <img
+                    src={item.image_url}
+                    alt={item.item_name}
+                    className="h-16 w-16 flex-shrink-0 rounded-lg object-cover"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h3 className="text-[14px] font-bold leading-snug text-white">{item.item_name}</h3>
+                        <p className="mt-0.5 text-[11px] font-medium text-emerald-300">
+                          Free with {item.offer_title}
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-300">
+                        Free
+                      </span>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between">
+                      <span className="text-[12px] font-bold text-emerald-300">{item.quantity}x added automatically</span>
+                      <span className="text-[14px] font-bold tabular-nums text-emerald-300">₹0</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           <Link
             to="/menu"
             className="flex items-center justify-center gap-1.5 py-2.5 text-[13px] font-bold text-brand-gold hover:bg-brand-gold/5 rounded-xl transition-colors"
@@ -681,21 +768,25 @@ export default function CartPage() {
           {couponError && <p className="text-red-400 text-[12px] mt-2">{couponError}</p>}
           {appliedOffer && (
             <div className="mt-2.5 bg-emerald-500/10 text-emerald-400 text-[12px] px-3 py-2 rounded-lg flex items-center justify-between">
-              <span className="font-semibold">{appliedOffer.title} applied! {getOfferRuleSummary(appliedOffer)}</span>
+              <span className="font-semibold">
+                {appliedOffer.title} applied! {couponRewardItems.length > 0 ? `${getPromoRewardSummary(couponRewardItems)} added free.` : getOfferRuleSummary(appliedOffer)}
+              </span>
               <button onClick={() => { setAppliedOffer(null); setCouponCode(''); }} className="font-semibold hover:underline">Remove</button>
             </div>
           )}
           {featuredAutomaticOffer && (
             <div className={`mt-2.5 text-[12px] px-3 py-2 rounded-lg border ${
-              automaticDiscount > 0
+              automaticOfferApplied
                 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
                 : 'bg-brand-gold/10 text-brand-gold border-brand-gold/20'
             }`}>
               <span className="font-semibold">
-                {automaticDiscount > 0 ? `${featuredAutomaticOffer.title} applied automatically!` : `${featuredAutomaticOffer.title} available:`}
+                {automaticOfferApplied ? `${featuredAutomaticOffer.title} applied automatically!` : `${featuredAutomaticOffer.title} available:`}
               </span>{' '}
-              {automaticDiscount > 0
-                ? `You saved ₹${automaticDiscount.toFixed(0)}.`
+              {automaticOfferApplied
+                ? automaticRewardItems.length > 0
+                  ? `${getPromoRewardSummary(automaticRewardItems)} added free.`
+                  : `You saved ₹${automaticDiscount.toFixed(0)}.`
                 : getOfferRuleSummary(featuredAutomaticOffer)}
             </div>
           )}
@@ -717,6 +808,12 @@ export default function CartPage() {
               <div className="flex justify-between text-emerald-400">
                 <span className="text-[13px]">Offer</span>
                 <span className="tabular-nums">-{'\u20B9'}{automaticDiscount.toFixed(0)}</span>
+              </div>
+            )}
+            {promoRewardItems.length > 0 && (
+              <div className="flex justify-between text-emerald-300">
+                <span className="text-[13px]">Free items added</span>
+                <span className="tabular-nums">{promoRewardItems.reduce((sum, item) => sum + item.quantity, 0)}</span>
               </div>
             )}
             {addOnTotal > 0 && (

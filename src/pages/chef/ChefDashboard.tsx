@@ -34,6 +34,7 @@ export default function ChefDashboard() {
   const [newOrderFlash, setNewOrderFlash] = useState(false);
   const [acceptingOrderId, setAcceptingOrderId] = useState<string | null>(null);
   const [payingOrderId, setPayingOrderId] = useState<string | null>(null);
+  const [completingOrderId, setCompletingOrderId] = useState<string | null>(null);
   const [handoffOrderId, setHandoffOrderId] = useState<string | null>(null);
   const navigate = useNavigate();
   const { showToast } = useToast();
@@ -85,16 +86,28 @@ export default function ChefDashboard() {
   }, [soundEnabled]);
 
   useEffect(() => {
-    loadOrders();
+    void loadOrders();
 
     const channel = supabase
       .channel('chef-orders')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
-        loadOrders();
+        void loadOrders();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => {
+        void loadOrders();
       })
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
+    const pollId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void loadOrders();
+      }
+    }, 5000);
+
+    return () => {
+      window.clearInterval(pollId);
+      supabase.removeChannel(channel);
+    };
   }, [loadOrders]);
 
   async function acceptOrder(order: Order) {
@@ -121,38 +134,26 @@ export default function ChefDashboard() {
       return;
     }
 
-    setOrders((prev) => prev.map((currentOrder) => (
-      currentOrder.id === order.id
-        ? {
-            ...currentOrder,
-            status: 'preparing',
-            confirmed_at: now,
-            accepted_at: now,
-            estimated_minutes: estimatedMinutes,
-            queue_position: null,
-          }
-        : currentOrder
-    )));
-    setTab('preparing');
-    showToast('Order moved to preparing');
-
-    if (soundEnabled) playAcceptSound();
-    setAcceptingOrderId(null);
+    try {
+      setTab('preparing');
+      showToast('Order moved to preparing');
+      if (soundEnabled) playAcceptSound();
+      await loadOrders();
+    } finally {
+      setAcceptingOrderId(null);
+    }
   }
 
   async function completeOrder(order: Order) {
+    if (completingOrderId === order.id) return;
+    setCompletingOrderId(order.id);
+
     try {
       const result = await markOrderReady(order.order_id);
-      const completedAt = new Date().toISOString();
-
-      setOrders((prev) => prev.map((currentOrder) => (
-        currentOrder.id === order.id
-          ? { ...currentOrder, status: 'packed', completed_at: completedAt }
-          : currentOrder
-      )));
       showToast(getReadyOrderLabel(order) === 'Ready to Serve' ? 'Order marked ready to serve' : 'Order marked ready for pickup');
 
       if (soundEnabled) playOrderCompleteSound();
+      await loadOrders();
 
       if (order.order_type === 'pickup' && result.readyEmailSent === false) {
         showToast('Order updated, but ready email failed', 'error');
@@ -160,7 +161,8 @@ export default function ChefDashboard() {
     } catch (error) {
       console.error('Failed to mark order complete', error);
       showToast('Failed to mark order complete', 'error');
-      return;
+    } finally {
+      setCompletingOrderId(null);
     }
   }
 
@@ -179,13 +181,12 @@ export default function ChefDashboard() {
       return;
     }
 
-    setOrders((prev) => prev.map((order) => (
-      order.id === orderId
-        ? { ...order, status: 'delivered' }
-        : order
-    )));
-    showToast('Pickup marked successfully');
-    setHandoffOrderId(null);
+    try {
+      showToast('Pickup marked successfully');
+      await loadOrders();
+    } finally {
+      setHandoffOrderId(null);
+    }
   }
 
   async function markPaymentCollected(order: Order) {
@@ -194,13 +195,8 @@ export default function ChefDashboard() {
 
     try {
       const result = await markOrderPaid(order.order_id);
-
-      setOrders((prev) => prev.map((currentOrder) => (
-        currentOrder.id === order.id
-          ? { ...currentOrder, payment_status: 'paid' }
-          : currentOrder
-      )));
       showToast('Payment marked as paid');
+      await loadOrders();
 
       if (result.receiptEmailSent === false) {
         showToast('Payment updated, but receipt email failed', 'error');
@@ -571,10 +567,11 @@ export default function ChefDashboard() {
               {isPreparing && (
                 <button
                   onClick={() => completeOrder(order)}
-                  className="w-full mt-2 py-3.5 rounded-xl font-bold text-[14px] bg-emerald-500 text-white hover:bg-emerald-600 transition-all active:scale-[0.98] flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20"
+                  disabled={completingOrderId === order.id}
+                  className="w-full mt-2 py-3.5 rounded-xl font-bold text-[14px] bg-emerald-500 text-white hover:bg-emerald-600 transition-all active:scale-[0.98] flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Package size={18} />
-                  Mark Complete
+                  {completingOrderId === order.id ? 'Updating...' : 'Mark Complete'}
                 </button>
               )}
 

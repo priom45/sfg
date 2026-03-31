@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { ChevronRight, ChevronLeft, Clock, Sparkles, Flame } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
-import { getOfferBadgeLabel, getOfferDisplayDescription, getOfferRewardLabel } from '../lib/offers';
+import { getOfferBadgeLabel, getOfferCtaText, getOfferDisplayDescription, getOfferRewardLabel } from '../lib/offers';
 import { useCart } from '../contexts/CartContext';
 import { useToast } from '../components/Toast';
 import ProductCard from '../components/ProductCard';
@@ -105,6 +105,7 @@ export default function Home() {
   const activeBannerOffer = offers[bannerIdx] || null;
   const activeBannerDescription = activeBannerOffer ? getOfferDisplayDescription(activeBannerOffer) : null;
   const activeBannerReward = activeBannerOffer ? getOfferRewardLabel(activeBannerOffer) : null;
+  const activeBannerCtaText = activeBannerOffer ? getOfferCtaText(activeBannerOffer) : 'Order Now';
   const requestedBannerBackgroundImage = normalizeImageUrl(activeBannerOffer?.background_image_url);
   const activeBannerBackgroundImage = requestedBannerBackgroundImage && !failedImageUrls[requestedBannerBackgroundImage]
     ? requestedBannerBackgroundImage
@@ -114,7 +115,7 @@ export default function Home() {
     <div className="bg-brand-bg min-h-screen pb-20">
       {activeBannerOffer && (
         <section className="px-4 pt-4 pb-2">
-          <div className="relative h-[228px] overflow-hidden rounded-[24px] border border-brand-border bg-brand-surface sm:h-[268px] lg:h-[308px]">
+          <div className="relative h-[240px] overflow-hidden rounded-[24px] border border-brand-border bg-brand-surface sm:h-[268px] lg:h-[308px]">
             <AnimatePresence mode="popLayout" initial={false}>
               <motion.div
                 key={bannerIdx}
@@ -129,10 +130,10 @@ export default function Home() {
                     <img
                       src={activeBannerBackgroundImage}
                       alt=""
-                      className="absolute inset-0 h-full w-full object-cover object-center"
+                      className="absolute inset-0 h-full w-full object-cover object-[76%_center] sm:object-center"
                       onError={() => markImageFailed(activeBannerBackgroundImage)}
                     />
-                    <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(8,11,7,0.96)_0%,rgba(8,11,7,0.84)_20%,rgba(8,11,7,0.54)_42%,rgba(8,11,7,0.2)_68%,rgba(8,11,7,0.08)_100%)]" />
+                    <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(8,11,7,0.97)_0%,rgba(8,11,7,0.92)_34%,rgba(8,11,7,0.56)_58%,rgba(8,11,7,0.14)_100%)] sm:bg-[linear-gradient(90deg,rgba(8,11,7,0.96)_0%,rgba(8,11,7,0.84)_20%,rgba(8,11,7,0.54)_42%,rgba(8,11,7,0.2)_68%,rgba(8,11,7,0.08)_100%)]" />
                     <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(8,11,7,0.12)_0%,rgba(8,11,7,0.04)_42%,rgba(8,11,7,0.28)_100%)]" />
                     <div className="absolute inset-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),inset_0_-40px_72px_rgba(0,0,0,0.2)]" />
                   </>
@@ -143,13 +144,13 @@ export default function Home() {
                     <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(216,178,78,0.18),_transparent_34%),radial-gradient(circle_at_75%_18%,_rgba(255,255,255,0.05),_transparent_22%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_45%)]" />
                   </>
                 )}
-                <div className="relative flex h-full items-center px-5 py-5 sm:px-7 sm:py-6 lg:px-10 lg:py-7">
-                  <div className={activeBannerBackgroundImage ? 'max-w-[280px] sm:max-w-[340px] lg:max-w-[410px]' : 'max-w-xl'}>
+                <div className="relative flex h-full items-end px-4 py-4 sm:items-center sm:px-7 sm:py-6 lg:px-10 lg:py-7">
+                  <div className={activeBannerBackgroundImage ? 'max-w-[54%] sm:max-w-[340px] lg:max-w-[410px]' : 'max-w-xl'}>
                     <motion.span
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.1, duration: 0.35 }}
-                      className="mb-2 inline-block rounded-md border border-brand-gold/15 bg-brand-gold/18 px-2.5 py-1 text-[12px] font-bold tracking-wide text-brand-gold"
+                      className="mb-2 inline-block rounded-md border border-brand-gold/15 bg-brand-gold/18 px-2 py-1 text-[10px] font-bold tracking-wide text-brand-gold sm:px-2.5 sm:text-[12px]"
                     >
                       {getOfferBadgeLabel(activeBannerOffer)}
                     </motion.span>
@@ -157,7 +158,7 @@ export default function Home() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.15, duration: 0.4 }}
-                      className="mb-1.5 text-[24px] font-extrabold leading-[1.02] text-white drop-shadow-[0_4px_18px_rgba(0,0,0,0.28)] sm:text-[30px] lg:text-[34px]"
+                      className="mb-1.5 text-[18px] font-extrabold leading-[1.02] text-white drop-shadow-[0_4px_18px_rgba(0,0,0,0.28)] sm:text-[30px] lg:text-[34px]"
                     >
                       {activeBannerOffer.title}
                     </motion.h3>
@@ -166,7 +167,7 @@ export default function Home() {
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.2, duration: 0.4 }}
-                        className="mb-3 whitespace-pre-line text-[13px] font-medium leading-snug text-white/84 drop-shadow-[0_3px_10px_rgba(0,0,0,0.24)] sm:text-[14px] lg:text-[15px]"
+                        className="mb-2.5 whitespace-pre-line text-[11.5px] font-medium leading-[1.28] text-white/84 drop-shadow-[0_3px_10px_rgba(0,0,0,0.24)] sm:mb-3 sm:text-[14px] sm:leading-snug lg:text-[15px]"
                       >
                         {activeBannerDescription}
                       </motion.p>
@@ -176,7 +177,7 @@ export default function Home() {
                         initial={{ opacity: 0, scale: 0.9 }}
                         animate={{ opacity: 1, scale: 1 }}
                         transition={{ delay: 0.25, duration: 0.35 }}
-                        className="inline-block text-[24px] font-black tracking-tight text-brand-gold drop-shadow-[0_4px_14px_rgba(0,0,0,0.26)] lg:text-[28px]"
+                        className="inline-block text-[16px] font-black tracking-tight text-brand-gold drop-shadow-[0_4px_14px_rgba(0,0,0,0.26)] sm:text-[24px] lg:text-[28px]"
                       >
                         {activeBannerReward}
                       </motion.span>
@@ -185,13 +186,13 @@ export default function Home() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.3, duration: 0.35 }}
-                      className="mt-4"
+                      className="mt-3 sm:mt-4"
                     >
                       <Link
                         to="/menu"
-                        className="inline-flex w-fit items-center gap-1.5 rounded-xl bg-brand-gold px-5 py-2.5 text-[14px] font-bold text-brand-bg shadow-[0_14px_30px_rgba(216,178,78,0.18)] transition-all hover:-translate-y-0.5 hover:brightness-110"
+                        className="inline-flex w-fit items-center gap-1.5 rounded-xl bg-brand-gold px-4 py-2 text-[13px] font-bold text-brand-bg shadow-[0_14px_30px_rgba(216,178,78,0.18)] transition-all hover:-translate-y-0.5 hover:brightness-110 sm:px-5 sm:py-2.5 sm:text-[14px]"
                       >
-                        Order Now
+                        {activeBannerCtaText}
                       </Link>
                     </motion.div>
                   </div>
@@ -199,7 +200,7 @@ export default function Home() {
               </motion.div>
             </AnimatePresence>
             {offers.length > 1 && (
-              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
+              <div className="absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 gap-1.5">
                 {offers.map((_, i) => (
                   <button
                     key={i}
