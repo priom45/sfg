@@ -6,7 +6,7 @@ import { useCart } from '../contexts/CartContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useSiteSettings } from '../hooks/useSiteSettings';
 import {
-  getBestAutomaticOffer,
+  getApplicableAutomaticOffers,
   getCartAddOnTotal,
   getOfferCode,
   getOfferDiscountAmount,
@@ -52,6 +52,7 @@ export default function CartPage() {
   const [activeOffers, setActiveOffers] = useState<Offer[]>([]);
   const [couponCode, setCouponCode] = useState('');
   const [appliedOffer, setAppliedOffer] = useState<Offer | null>(null);
+  const [selectedAutomaticOfferId, setSelectedAutomaticOfferId] = useState<string | null>(null);
   const [couponError, setCouponError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [editingItem, setEditingItem] = useState<{
@@ -169,9 +170,14 @@ export default function CartPage() {
   };
   const couponRewardItems = appliedOffer ? getOfferRewardItems(appliedOffer, pricingContext) : [];
   const couponDiscount = appliedOffer ? getOfferDiscountAmount(appliedOffer, pricingContext) : 0;
-  const automaticOffer = getBestAutomaticOffer(activeOffers, pricingContext);
-  const automaticDiscount = automaticOffer?.discountAmount || 0;
-  const automaticRewardItems = automaticOffer?.freeItems || [];
+  const applicableAutomaticOffers = getApplicableAutomaticOffers(activeOffers, pricingContext);
+  const selectedAutomaticOffer = selectedAutomaticOfferId
+    ? applicableAutomaticOffers.find((result) => result.offer.id === selectedAutomaticOfferId) || null
+    : applicableAutomaticOffers.length === 1
+      ? applicableAutomaticOffers[0]
+      : null;
+  const automaticDiscount = selectedAutomaticOffer?.discountAmount || 0;
+  const automaticRewardItems = selectedAutomaticOffer?.freeItems || [];
   const promoRewardItems = [...couponRewardItems, ...automaticRewardItems];
   const checkoutItems = [
     ...items.map((item) => ({
@@ -189,13 +195,42 @@ export default function CartPage() {
       customizations: [] as SelectedCustomization[],
     })),
   ];
-  const featuredAutomaticOffer = automaticOffer?.offer || activeOffers.find((offer) => getOfferMode(offer) === 'automatic') || null;
+  const featuredAutomaticOffer = selectedAutomaticOffer?.offer || applicableAutomaticOffers[0]?.offer || activeOffers.find((offer) => getOfferMode(offer) === 'automatic') || null;
   const discount = Math.min(subtotal, couponDiscount + automaticDiscount);
   const takeawayFee = pickupOption === 'takeaway' ? TAKEAWAY_CHARGE : 0;
   const total = Math.max(0, subtotal - discount) + takeawayFee;
   const isFreeOrder = total <= 0;
   const automaticOfferApplied = automaticDiscount > 0 || automaticRewardItems.length > 0;
+  const multipleAutomaticOffersAvailable = applicableAutomaticOffers.length > 1;
   const serviceModeLabel = getServiceModeLabel({ order_type: 'pickup', pickup_option: pickupOption });
+
+  useEffect(() => {
+    if (applicableAutomaticOffers.length === 0) {
+      if (selectedAutomaticOfferId !== null) {
+        setSelectedAutomaticOfferId(null);
+      }
+      return;
+    }
+
+    if (
+      selectedAutomaticOfferId
+      && applicableAutomaticOffers.some((result) => result.offer.id === selectedAutomaticOfferId)
+    ) {
+      return;
+    }
+
+    if (applicableAutomaticOffers.length === 1) {
+      const onlyOfferId = applicableAutomaticOffers[0].offer.id;
+      if (selectedAutomaticOfferId !== onlyOfferId) {
+        setSelectedAutomaticOfferId(onlyOfferId);
+      }
+      return;
+    }
+
+    if (selectedAutomaticOfferId !== null) {
+      setSelectedAutomaticOfferId(null);
+    }
+  }, [applicableAutomaticOffers, selectedAutomaticOfferId]);
 
   useEffect(() => {
     if (isFreeOrder || paymentMethod !== 'card') return;
@@ -775,19 +810,65 @@ export default function CartPage() {
             </div>
           )}
           {featuredAutomaticOffer && (
-            <div className={`mt-2.5 text-[12px] px-3 py-2 rounded-lg border ${
-              automaticOfferApplied
-                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                : 'bg-brand-gold/10 text-brand-gold border-brand-gold/20'
-            }`}>
-              <span className="font-semibold">
-                {automaticOfferApplied ? `${featuredAutomaticOffer.title} applied automatically!` : `${featuredAutomaticOffer.title} available:`}
-              </span>{' '}
-              {automaticOfferApplied
-                ? automaticRewardItems.length > 0
-                  ? `${getPromoRewardSummary(automaticRewardItems)} added free.`
-                  : `You saved ₹${automaticDiscount.toFixed(0)}.`
-                : getOfferRuleSummary(featuredAutomaticOffer)}
+            <div className="mt-2.5 rounded-lg border border-brand-gold/20 bg-brand-gold/10 px-3 py-3 text-[12px]">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold text-brand-gold">
+                  {multipleAutomaticOffersAvailable ? 'Choose 1 automatic offer for this order' : `${featuredAutomaticOffer.title} available`}
+                </span>
+                {multipleAutomaticOffersAvailable && automaticOfferApplied && selectedAutomaticOffer && (
+                  <button
+                    onClick={() => setSelectedAutomaticOfferId(null)}
+                    className="font-semibold text-brand-text-muted hover:text-white"
+                  >
+                    Change
+                  </button>
+                )}
+              </div>
+
+              {!multipleAutomaticOffersAvailable && (
+                <p className={`mt-1 ${automaticOfferApplied ? 'text-emerald-400' : 'text-brand-gold'}`}>
+                  {automaticOfferApplied
+                    ? automaticRewardItems.length > 0
+                      ? `${getPromoRewardSummary(automaticRewardItems)} added free.`
+                      : `You saved ₹${automaticDiscount.toFixed(0)}.`
+                    : getOfferRuleSummary(featuredAutomaticOffer)}
+                </p>
+              )}
+
+              {multipleAutomaticOffersAvailable && (
+                <div className="mt-3 space-y-2">
+                  {applicableAutomaticOffers.map((offerResult) => {
+                    const isSelected = selectedAutomaticOfferId === offerResult.offer.id;
+                    const offerValueText = offerResult.freeItems.length > 0
+                      ? `${getPromoRewardSummary(offerResult.freeItems)} free`
+                      : `Save ₹${offerResult.discountAmount.toFixed(0)}`;
+
+                    return (
+                      <button
+                        key={offerResult.offer.id}
+                        onClick={() => setSelectedAutomaticOfferId(offerResult.offer.id)}
+                        className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                          isSelected
+                            ? 'border-emerald-500/30 bg-emerald-500/10'
+                            : 'border-brand-border bg-brand-surface/40 hover:border-brand-gold/30 hover:bg-brand-surface/60'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`font-semibold ${isSelected ? 'text-emerald-400' : 'text-white'}`}>
+                            {offerResult.offer.title}
+                          </span>
+                          <span className={`text-[11px] font-bold ${isSelected ? 'text-emerald-300' : 'text-brand-gold'}`}>
+                            {offerValueText}
+                          </span>
+                        </div>
+                        <p className={`mt-1 ${isSelected ? 'text-emerald-300' : 'text-brand-text-muted'}`}>
+                          {getOfferRuleSummary(offerResult.offer)}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>

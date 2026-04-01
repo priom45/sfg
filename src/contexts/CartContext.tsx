@@ -1,4 +1,5 @@
 import { createContext, useContext, useReducer, useEffect, type ReactNode } from 'react';
+import { useState } from 'react';
 import type { CartItem, MenuItem, SelectedCustomization } from '../types';
 
 interface CartState {
@@ -77,6 +78,7 @@ const CartContext = createContext<CartContextType | null>(null);
 
 export function CartProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(cartReducer, { items: [], subtotal: 0, itemCount: 0 });
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem('supreme-waffle-cart');
@@ -88,11 +90,15 @@ export function CartProvider({ children }: { children: ReactNode }) {
         // ignore
       }
     }
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
     localStorage.setItem('supreme-waffle-cart', JSON.stringify(state.items));
-  }, [state.items]);
+  }, [hydrated, state.items]);
 
   const addItem = (menuItem: MenuItem, quantity: number, customizations: SelectedCustomization[]) => {
     const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'

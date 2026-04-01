@@ -123,7 +123,15 @@ function getOfferEligibleCycles(offer: Offer, context: OfferPricingContext) {
       return 0;
     }
     const requiredQuantity = getRequiredItemQuantity(offer) || 1;
-    return Math.floor(getOfferItemCount(offer, context) / requiredQuantity);
+    const eligibleCycles = Math.floor(getOfferItemCount(offer, context) / requiredQuantity);
+
+    // When a free-item offer also has a minimum-order gate, treat it as a single
+    // per-order reward after both conditions are satisfied.
+    if (getOfferDiscountType(offer) === 'free_item' && minimumOrder > 0) {
+      return eligibleCycles > 0 ? 1 : 0;
+    }
+
+    return eligibleCycles;
   }
 
   const minimumOrder = Math.max(0, normalizeNumber(offer.min_order));
@@ -349,7 +357,13 @@ export function getOfferDiscountAmount(offer: Offer, context: OfferPricingContex
 }
 
 export function getBestAutomaticOffer(offers: Offer[], context: OfferPricingContext): AutomaticOfferResult | null {
-  const applicableOffers = offers
+  const applicableOffers = getApplicableAutomaticOffers(offers, context);
+
+  return applicableOffers[0] || null;
+}
+
+export function getApplicableAutomaticOffers(offers: Offer[], context: OfferPricingContext): AutomaticOfferResult[] {
+  return offers
     .filter((offer) => getOfferMode(offer) === 'automatic')
     .map((offer) => ({
       offer,
@@ -362,7 +376,14 @@ export function getBestAutomaticOffer(offers: Offer[], context: OfferPricingCont
       estimatedValue: result.discountAmount + result.freeItems.reduce((sum, item) => sum + item.unit_price * item.quantity, 0),
     }))
     .filter((result) => result.discountAmount > 0 || result.freeItems.length > 0)
-    .sort((left, right) => right.estimatedValue - left.estimatedValue || right.discountAmount - left.discountAmount);
+    .sort((left, right) => {
+      const leftIsFreeItem = getOfferDiscountType(left.offer) === 'free_item';
+      const rightIsFreeItem = getOfferDiscountType(right.offer) === 'free_item';
 
-  return applicableOffers[0] || null;
+      if (leftIsFreeItem !== rightIsFreeItem) {
+        return rightIsFreeItem ? 1 : -1;
+      }
+
+      return right.estimatedValue - left.estimatedValue || right.discountAmount - left.discountAmount;
+    });
 }
