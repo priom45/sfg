@@ -10,6 +10,7 @@ import type { Order, OrderStatus } from '../../types';
 
 const pickupFlow: OrderStatus[] = ['confirmed', 'preparing', 'packed', 'delivered'];
 const deliveryFlow: OrderStatus[] = ['confirmed', 'preparing', 'packed', 'out_for_delivery', 'delivered'];
+const MAX_ADMIN_ORDERS = 100;
 type ReceiptItemRow = {
   item_name: string;
   quantity: number;
@@ -18,6 +19,16 @@ type ReceiptItemRow = {
 };
 
 const PREP_TIME_OPTIONS = [5, 10, 15, 20, 25, 30, 45, 60];
+
+function byPlacedAtDesc(a: Order, b: Order) {
+  return new Date(b.placed_at).getTime() - new Date(a.placed_at).getTime();
+}
+
+function mergeRecentOrder(prev: Order[], next: Order) {
+  const merged = [next, ...prev.filter((order) => order.id !== next.id)];
+  merged.sort(byPlacedAtDesc);
+  return merged.slice(0, MAX_ADMIN_ORDERS);
+}
 
 function getNextStatus(order: Order): OrderStatus | null {
   const flow = order.order_type === 'pickup' ? pickupFlow : deliveryFlow;
@@ -139,7 +150,7 @@ export default function AdminOrders() {
       .from('orders')
       .select('*')
       .order('placed_at', { ascending: false })
-      .limit(100);
+      .limit(MAX_ADMIN_ORDERS);
     if (error) {
       console.error('Failed to load orders', error);
       showToast(error.message || 'Failed to load orders', 'error');
@@ -152,8 +163,16 @@ export default function AdminOrders() {
     void loadOrders();
     const channel = supabase
       .channel('admin-orders')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
-        void loadOrders();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+        if (payload.eventType === 'DELETE') {
+          const deletedId = (payload.old as { id?: string } | null)?.id;
+          if (!deletedId) return;
+          setOrders((prev) => prev.filter((order) => order.id !== deletedId));
+          return;
+        }
+
+        const nextOrder = payload.new as Order;
+        setOrders((prev) => mergeRecentOrder(prev, nextOrder));
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };

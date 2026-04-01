@@ -24,6 +24,8 @@ interface OrderItemRow {
 }
 
 type Tab = 'payments' | 'queue' | 'preparing' | 'done';
+const ACTIVE_ORDER_STATUSES = ['pending', 'confirmed', 'preparing', 'packed'] as const;
+const CHEF_REFRESH_DEBOUNCE_MS = 250;
 
 export default function ChefDashboard() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -41,13 +43,35 @@ export default function ChefDashboard() {
   const { signOut } = useAuth();
   const prevPendingCountRef = useRef(0);
   const initialLoadRef = useRef(true);
+  const flashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadOrders = useCallback(async () => {
-    const { data } = await supabase
-      .from('orders')
-      .select('*')
-      .in('status', ['pending', 'confirmed', 'preparing', 'packed', 'delivered'])
-      .order('placed_at', { ascending: true });
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayIso = today.toISOString();
+
+    const [activeOrdersResult, deliveredOrdersResult] = await Promise.all([
+      supabase
+        .from('orders')
+        .select('*')
+        .in('status', [...ACTIVE_ORDER_STATUSES])
+        .order('placed_at', { ascending: true }),
+      supabase
+        .from('orders')
+        .select('*')
+        .eq('status', 'delivered')
+        .gte('placed_at', todayIso)
+        .order('placed_at', { ascending: false }),
+    ]);
+
+    const firstError = activeOrdersResult.error || deliveredOrdersResult.error;
+    if (firstError) {
+      console.error('Failed to load chef orders', firstError);
+      showToast(firstError.message || 'Failed to load kitchen orders', 'error');
+    }
+
+    const data = [...(activeOrdersResult.data || []), ...(deliveredOrdersResult.data || [])];
 
     if (data && data.length > 0) {
       const pendingCount = data.filter((o) => o.status === 'pending' && !isAwaitingOnlinePayment(o) && !isAwaitingCounterPayment(o)).length;
@@ -56,7 +80,10 @@ export default function ChefDashboard() {
         playNewOrderAlert();
         setNewOrderFlash(true);
         setTab('queue');
-        setTimeout(() => setNewOrderFlash(false), 2000);
+        if (flashTimeoutRef.current) {
+          clearTimeout(flashTimeoutRef.current);
+        }
+        flashTimeoutRef.current = setTimeout(() => setNewOrderFlash(false), 2000);
       }
 
       prevPendingCountRef.current = pendingCount;
@@ -64,26 +91,41 @@ export default function ChefDashboard() {
       setOrders(data);
 
       const ids = data.map((o) => o.id);
-      const { data: items } = await supabase
+      const { data: items, error: itemsError } = await supabase
         .from('order_items')
         .select('*')
         .in('order_id', ids);
 
-      if (items) {
-        const map: Record<string, OrderItemRow[]> = {};
-        items.forEach((item) => {
-          if (!map[item.order_id]) map[item.order_id] = [];
-          map[item.order_id].push(item as OrderItemRow);
-        });
-        setOrderItemsMap(map);
+      if (itemsError) {
+        console.error('Failed to load chef order items', itemsError);
+        showToast(itemsError.message || 'Failed to load order items', 'error');
       }
+
+      const map: Record<string, OrderItemRow[]> = {};
+      (items || []).forEach((item) => {
+        if (!map[item.order_id]) map[item.order_id] = [];
+        map[item.order_id].push(item as OrderItemRow);
+      });
+      setOrderItemsMap(map);
     } else {
       initialLoadRef.current = false;
       prevPendingCountRef.current = 0;
       setOrders(data || []);
+      setOrderItemsMap({});
     }
     setLoading(false);
-  }, [soundEnabled]);
+  }, [showToast, soundEnabled]);
+
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimeoutRef.current) {
+      clearTimeout(refreshTimeoutRef.current);
+    }
+
+    refreshTimeoutRef.current = setTimeout(() => {
+      refreshTimeoutRef.current = null;
+      void loadOrders();
+    }, CHEF_REFRESH_DEBOUNCE_MS);
+  }, [loadOrders]);
 
   useEffect(() => {
     void loadOrders();
@@ -91,24 +133,32 @@ export default function ChefDashboard() {
     const channel = supabase
       .channel('chef-orders')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
-        void loadOrders();
+        scheduleRefresh();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => {
-        void loadOrders();
+        scheduleRefresh();
       })
       .subscribe();
 
-    const pollId = window.setInterval(() => {
+    const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         void loadOrders();
       }
-    }, 5000);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
-      window.clearInterval(pollId);
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+      }
+      if (flashTimeoutRef.current) {
+        clearTimeout(flashTimeoutRef.current);
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       supabase.removeChannel(channel);
     };
-  }, [loadOrders]);
+  }, [loadOrders, scheduleRefresh]);
 
   async function acceptOrder(order: Order) {
     if (acceptingOrderId === order.id) return;

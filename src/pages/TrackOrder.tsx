@@ -108,13 +108,14 @@ export default function TrackOrderPage() {
     if (!order) return;
 
     async function loadQueuePosition(currentOrder: Order) {
-      const { data } = await supabase
+      const { count } = await supabase
         .from('orders')
-        .select('id, order_type, payment_provider, payment_status, total')
+        .select('id', { count: 'exact', head: true })
         .eq('status', 'pending')
-        .lt('placed_at', currentOrder.placed_at);
+        .lt('placed_at', currentOrder.placed_at)
+        .or('total.lte.0,order_type.eq.delivery,payment_status.eq.paid');
 
-      setQueueAhead((data || []).filter((queuedOrder) => !isAwaitingOnlinePayment(queuedOrder) && !isAwaitingCounterPayment(queuedOrder)).length);
+      setQueueAhead(count || 0);
     }
 
     if (order.order_type === 'pickup' && order.status === 'packed') {
@@ -139,6 +140,10 @@ export default function TrackOrderPage() {
       }
     }
     prevStatusRef.current = order.status;
+  }, [order]);
+
+  useEffect(() => {
+    if (!order?.order_id) return;
 
     const channel = supabase
       .channel(`track-${order.order_id}`)
@@ -154,7 +159,7 @@ export default function TrackOrderPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [order]);
+  }, [order?.order_id]);
 
   async function loadSpecials() {
     const { data } = await supabase

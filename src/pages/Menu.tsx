@@ -63,6 +63,105 @@ function upsertHeadTag(
   }
 }
 
+type SuggestedCategoryContext = {
+  title: string;
+  subtitle: string;
+  categories: Category[];
+};
+
+function normalizeCategoryText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function categoryMatchesToken(category: Category, token: string) {
+  return normalizeCategoryText(`${category.name} ${category.slug}`).includes(token);
+}
+
+function pickSuggestedCategories(categories: Category[], tokenGroups: string[][], limit = 6) {
+  const picked: Category[] = [];
+  const usedIds = new Set<string>();
+
+  tokenGroups.forEach((tokens) => {
+    const match = categories.find((category) => (
+      !usedIds.has(category.id)
+      && tokens.some((token) => categoryMatchesToken(category, token))
+    ));
+
+    if (!match) return;
+
+    picked.push(match);
+    usedIds.add(match.id);
+  });
+
+  if (picked.length >= limit) {
+    return picked.slice(0, limit);
+  }
+
+  return [
+    ...picked,
+    ...categories.filter((category) => !usedIds.has(category.id)).slice(0, limit - picked.length),
+  ];
+}
+
+function buildSuggestedCategoryContext(categories: Category[], now = new Date()): SuggestedCategoryContext {
+  const hour = now.getHours();
+  const month = now.getMonth();
+  const isSummerWindow = [2, 3, 4, 5].includes(month);
+
+  if (hour >= 12 && hour < 17) {
+    return {
+      title: isSummerWindow ? 'Summer Afternoon Picks' : 'Afternoon Picks',
+      subtitle: isSummerWindow
+        ? 'Lead with cold scoops, milkshakes, thick shakes, and lighter dessert categories.'
+        : 'Push colder, lighter categories while the afternoon is hottest.',
+      categories: pickSuggestedCategories(categories, [
+        ['ice cream', 'scoop'],
+        ['milkshake'],
+        ['thick shake'],
+        ['cone'],
+        ['belgian'],
+        ['stick waffle'],
+      ]),
+    };
+  }
+
+  if (hour >= 17 && hour < 22) {
+    return {
+      title: 'Evening Cravings',
+      subtitle: 'Rotate savory snack categories first, then keep drinks nearby for add-ons.',
+      categories: pickSuggestedCategories(categories, [
+        ['chaat'],
+        ['fries'],
+        ['chicken snack'],
+        ['momo'],
+        ['burger'],
+        ['milkshake'],
+      ]),
+    };
+  }
+
+  return {
+    title: 'Trending Categories',
+    subtitle: 'Keep best-selling waffles and easy add-on drinks in front by default.',
+    categories: pickSuggestedCategories(categories, [
+      ['belgian'],
+      ['stick waffle'],
+      ['cone'],
+      ['milkshake'],
+      ['thick shake'],
+      ['fries'],
+    ]),
+  };
+}
+
+function getRotatingCategoryWindow(categories: Category[], startIndex: number, size: number) {
+  if (categories.length <= size) {
+    return categories;
+  }
+
+  return Array.from({ length: size }, (_, offset) => categories[(startIndex + offset) % categories.length]);
+}
+
 export default function MenuPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [categories, setCategories] = useState<Category[]>([]);
@@ -76,8 +175,10 @@ export default function MenuPage() {
   const [pendingAddOnItem, setPendingAddOnItem] = useState<{ cartItemId: string; menuItem: MenuItem; quantity: number } | null>(null);
   const [customizationAvailability, setCustomizationAvailability] = useState<CustomizationAvailability | null>(null);
   const [bannerIdx, setBannerIdx] = useState(0);
+  const [suggestedCategoryIdx, setSuggestedCategoryIdx] = useState(0);
   const [failedImageUrls, setFailedImageUrls] = useState<Record<string, true>>({});
   const bannerTimer = useRef<ReturnType<typeof setInterval>>();
+  const suggestionTimer = useRef<ReturnType<typeof setInterval>>();
   const filterBarRef = useRef<HTMLDivElement>(null);
   const { addItem, removeItem } = useCart();
   const { showToast } = useToast();
@@ -146,6 +247,39 @@ export default function MenuPage() {
     };
   }, [offers.length]);
 
+  const suggestedCategoryContext = useMemo(
+    () => buildSuggestedCategoryContext(categories),
+    [categories],
+  );
+  const suggestedCategoryPriority = useMemo(
+    () => new Map(suggestedCategoryContext.categories.map((category, index) => [
+      category.id,
+      suggestedCategoryContext.categories.length - index,
+    ])),
+    [suggestedCategoryContext.categories],
+  );
+  const visibleSuggestedCategories = useMemo(
+    () => getRotatingCategoryWindow(suggestedCategoryContext.categories, suggestedCategoryIdx, 3),
+    [suggestedCategoryContext.categories, suggestedCategoryIdx],
+  );
+
+  useEffect(() => {
+    setSuggestedCategoryIdx(0);
+  }, [suggestedCategoryContext.title, suggestedCategoryContext.categories.length]);
+
+  useEffect(() => {
+    if (suggestionTimer.current) clearInterval(suggestionTimer.current);
+    if (suggestedCategoryContext.categories.length <= 3) return;
+
+    suggestionTimer.current = setInterval(() => {
+      setSuggestedCategoryIdx((current) => (current + 1) % suggestedCategoryContext.categories.length);
+    }, 3500);
+
+    return () => {
+      if (suggestionTimer.current) clearInterval(suggestionTimer.current);
+    };
+  }, [suggestedCategoryContext.categories]);
+
   const filteredItems = useMemo(() => {
     let result = [...items];
     if (activeCategory !== 'all') {
@@ -159,10 +293,21 @@ export default function MenuPage() {
     switch (sortBy) {
       case 'price_low': result.sort((a, b) => a.price - b.price); break;
       case 'price_high': result.sort((a, b) => b.price - a.price); break;
-      default: result.sort((a, b) => b.rating - a.rating);
+      default:
+        result.sort((a, b) => {
+          if (activeCategory === 'all' && !search.trim()) {
+            const categoryBoost = (suggestedCategoryPriority.get(b.category_id) || 0) - (suggestedCategoryPriority.get(a.category_id) || 0);
+            if (categoryBoost !== 0) return categoryBoost;
+          }
+
+          const ratingDelta = b.rating - a.rating;
+          if (ratingDelta !== 0) return ratingDelta;
+
+          return a.display_order - b.display_order;
+        });
     }
     return result;
-  }, [items, categories, activeCategory, search, sortBy]);
+  }, [items, categories, activeCategory, search, sortBy, suggestedCategoryPriority]);
   const currentCategory = useMemo(
     () => (activeCategory === 'all' ? null : categories.find((category) => category.slug === activeCategory) || null),
     [activeCategory, categories],
@@ -207,6 +352,11 @@ export default function MenuPage() {
   }, []);
 
   const handleAdd = useCallback((item: MenuItem) => {
+    if (!item.is_available) {
+      showToast(`${item.name} is currently out of stock`, 'error');
+      return;
+    }
+
     const supportsCustomizations = itemHasAssignedCustomizations(item, customizationAvailability);
     const cartItemId = addItem(item, 1, []);
     playAddToCartSound();
@@ -220,6 +370,11 @@ export default function MenuPage() {
   }, [addItem, customizationAvailability, showToast]);
 
   const handleBaseConfirm = useCallback((item: MenuItem, qty: number) => {
+    if (!item.is_available) {
+      showToast(`${item.name} is currently out of stock`, 'error');
+      return;
+    }
+
     const supportsCustomizations = itemHasAssignedCustomizations(item, customizationAvailability);
     const cartItemId = addItem(item, qty, []);
     playAddToCartSound();
@@ -510,6 +665,47 @@ export default function MenuPage() {
               )}
             </div>
           </div>
+          {activeCategory === 'all' && !search.trim() && visibleSuggestedCategories.length > 0 && (
+            <div className="mb-3 overflow-hidden rounded-2xl border border-brand-gold/15 bg-[linear-gradient(135deg,rgba(216,178,78,0.12),rgba(19,27,17,0.96)_52%,rgba(216,178,78,0.04))] p-3">
+              <div className="mb-2 flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-[0.24em] text-brand-gold/85">
+                    {suggestedCategoryContext.title}
+                  </p>
+                  <p className="mt-1 max-w-2xl text-[12px] font-medium leading-relaxed text-brand-text-dim">
+                    {suggestedCategoryContext.subtitle}
+                  </p>
+                </div>
+                {suggestedCategoryContext.categories.length > 3 && (
+                  <div className="flex gap-1.5 pt-1">
+                    {suggestedCategoryContext.categories.map((category, index) => (
+                      <button
+                        key={category.id}
+                        type="button"
+                        onClick={() => setSuggestedCategoryIdx(index)}
+                        className={`h-1.5 rounded-full transition-all ${
+                          index === suggestedCategoryIdx ? 'w-5 bg-brand-gold' : 'w-1.5 bg-brand-gold/30'
+                        }`}
+                        aria-label={`Show suggestion ${index + 1}`}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                {visibleSuggestedCategories.map((category) => (
+                  <button
+                    key={category.id}
+                    type="button"
+                    onClick={() => handleCategoryChange(category.slug)}
+                    className="rounded-full border border-brand-gold/25 bg-brand-gold/10 px-3 py-1.5 text-[12px] font-bold text-brand-gold transition-all hover:border-brand-gold/45 hover:bg-brand-gold/15"
+                  >
+                    {category.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex items-center gap-2 overflow-x-auto pb-1 -mb-1 scrollbar-hide relative">
             <CategoryPill
               label="All"
