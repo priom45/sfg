@@ -2,11 +2,14 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Search, Phone, MessageCircle, ArrowLeft, Package, Bell, PartyPopper, Clock, Truck, ChefHat, Users, Sparkles, ArrowRight, Star, CheckCircle, Wallet, BadgeCheck, User, XCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { clearPendingOnlineOrder, readPendingOnlineOrder } from '../lib/pendingOnlineOrder';
 import { getCompletedOrderLabel, getPaymentMethodLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment, isDineInOrder } from '../lib/orderLabels';
+import { reconcileRazorpayPayment } from '../lib/razorpay';
 import { playOrderCompleteSound, playPickupReadyAlert } from '../lib/sounds';
 import type { Order, OrderItem, MenuItem } from '../types';
 import OrderTimeline from '../components/OrderTimeline';
 import { useAuth } from '../contexts/AuthContext';
+import { useCart } from '../contexts/CartContext';
 
 function PrepCountdown({ confirmedAt, estimatedMinutes }: { confirmedAt: string; estimatedMinutes: number }) {
   const [remaining, setRemaining] = useState(0);
@@ -93,8 +96,11 @@ export default function TrackOrderPage() {
   const [showReadyBanner, setShowReadyBanner] = useState(false);
   const [queueAhead, setQueueAhead] = useState(0);
   const [specials, setSpecials] = useState<MenuItem[]>([]);
+  const [reconcilingPayment, setReconcilingPayment] = useState(false);
   const prevStatusRef = useRef<string | null>(null);
   const pickupAlertPlayedRef = useRef(false);
+  const reconciledPendingOrderRef = useRef<string | null>(null);
+  const { clearCart } = useCart();
 
   useEffect(() => {
     setSearchId(paramOrderId || '');
@@ -160,6 +166,71 @@ export default function TrackOrderPage() {
       supabase.removeChannel(channel);
     };
   }, [order?.order_id]);
+
+  useEffect(() => {
+    if (!order) return;
+
+    const pendingRecoveryOrderId = readPendingOnlineOrder();
+    if (pendingRecoveryOrderId === order.order_id && order.payment_provider === 'razorpay' && order.payment_status === 'paid') {
+      clearPendingOnlineOrder(order.order_id);
+      clearCart();
+      return;
+    }
+
+    if (order.payment_status === 'failed' || order.status === 'cancelled' || order.status === 'expired') {
+      clearPendingOnlineOrder(order.order_id);
+    }
+  }, [clearCart, order]);
+
+  useEffect(() => {
+    if (!order || !isAwaitingOnlinePayment(order)) {
+      setReconcilingPayment(false);
+      return;
+    }
+
+    if (reconciledPendingOrderRef.current === order.order_id) {
+      return;
+    }
+
+    reconciledPendingOrderRef.current = order.order_id;
+    setReconcilingPayment(true);
+
+    void (async () => {
+      try {
+        const reconciliation = await reconcileRazorpayPayment(order.order_id);
+
+        if (reconciliation.paymentState === 'paid') {
+          setOrder((currentOrder) => currentOrder && currentOrder.order_id === order.order_id
+            ? {
+                ...currentOrder,
+                payment_status: 'paid',
+                payment_provider: 'razorpay',
+                payment_method: reconciliation.paymentMethod ?? currentOrder.payment_method,
+                status: (reconciliation.orderStatus as Order['status'] | undefined) ?? currentOrder.status,
+              }
+            : currentOrder);
+          return;
+        }
+
+        if (reconciliation.paymentState === 'failed') {
+          clearPendingOnlineOrder(order.order_id);
+          setOrder((currentOrder) => currentOrder && currentOrder.order_id === order.order_id
+            ? {
+                ...currentOrder,
+                payment_status: 'failed',
+                status: reconciliation.orderStatus === 'expired'
+                  ? 'expired'
+                  : (reconciliation.orderStatus as Order['status'] | undefined) ?? currentOrder.status,
+              }
+            : currentOrder);
+        }
+      } catch (reconciliationError) {
+        console.error('Failed to reconcile Razorpay payment', reconciliationError);
+      } finally {
+        setReconcilingPayment(false);
+      }
+    })();
+  }, [order]);
 
   async function loadSpecials() {
     const { data } = await supabase
@@ -227,10 +298,11 @@ export default function TrackOrderPage() {
   const isDelivered = order?.status === 'delivered';
   const isCancelled = order?.status === 'cancelled';
   const isExpired = order?.status === 'expired';
+  const isOnlinePaymentPending = order ? isAwaitingOnlinePayment(order) : false;
   const isCounterPaymentPending = order ? isAwaitingCounterPayment(order) : false;
-  const isInQueue = order?.status === 'pending' && !isCounterPaymentPending;
+  const isInQueue = order?.status === 'pending' && !isCounterPaymentPending && !isOnlinePaymentPending;
   const isPreparing = order?.status === 'preparing';
-  const isActive = order && !['cancelled', 'expired', 'delivered'].includes(order.status) && !isReadyForPickup && !isCounterPaymentPending;
+  const isActive = order && !['cancelled', 'expired', 'delivered'].includes(order.status) && !isReadyForPickup && !isCounterPaymentPending && !isOnlinePaymentPending;
   const showCountdown = isActive && order.estimated_minutes && (order.accepted_at || order.confirmed_at) && ['confirmed', 'preparing'].includes(order.status);
   const serviceModeLabel = order ? getServiceModeLabel(order) : '';
   const readyOrderLabel = order ? getReadyOrderLabel(order) : '';
@@ -308,6 +380,23 @@ export default function TrackOrderPage() {
 
         {order && (
           <div className="max-w-lg space-y-6 animate-fade-in">
+
+            {isOnlinePaymentPending && (
+              <div className="relative overflow-hidden rounded-2xl bg-sky-500 p-6 text-center text-white shadow-elevated animate-scale-in backdrop-blur">
+                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_50%,rgba(255,255,255,0.12),transparent)]" />
+                <div className="relative">
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-brand-surface-strong/80 backdrop-blur-sm">
+                    <Clock size={32} className={reconcilingPayment ? 'animate-spin' : ''} />
+                  </div>
+                  <h2 className="mb-2 text-2xl font-black">Payment Processing</h2>
+                  <p className="text-[14px] text-sky-100">
+                    {reconcilingPayment
+                      ? 'We are checking your online payment now. If money was debited, this order will update automatically.'
+                      : 'Your online payment is still being verified. No further action is needed if money was debited.'}
+                  </p>
+                </div>
+              </div>
+            )}
 
             {isCounterPaymentPending && (
               <div className="relative overflow-hidden rounded-2xl bg-amber-500 p-6 text-center text-white shadow-elevated animate-scale-in backdrop-blur">
@@ -481,7 +570,9 @@ export default function TrackOrderPage() {
                 <div className="text-right">
                   <span
                     className={`inline-block rounded-full px-3 py-1 text-[12px] font-semibold capitalize ${
-                      isCounterPaymentPending
+                      isOnlinePaymentPending
+                        ? 'bg-sky-500/10 text-sky-400'
+                        : isCounterPaymentPending
                         ? 'bg-amber-500/10 text-amber-400'
                         : order.status === 'delivered'
                         ? 'bg-emerald-500/10 text-emerald-400'
@@ -492,7 +583,9 @@ export default function TrackOrderPage() {
                             : 'bg-brand-gold/10 text-brand-gold'
                     }`}
                   >
-                    {isCounterPaymentPending
+                    {isOnlinePaymentPending
+                      ? 'payment processing'
+                      : isCounterPaymentPending
                       ? 'payment pending'
                       : isReadyForPickup
                       ? readyOrderLabel

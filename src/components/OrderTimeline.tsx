@@ -1,6 +1,6 @@
 import { Check, Clock, ChefHat, Package, Truck, MapPin, XCircle, Timer, Bell } from 'lucide-react';
 import type { OrderStatus, OrderType, PickupOption } from '../types';
-import { isAwaitingCounterPayment } from '../lib/orderLabels';
+import { isAwaitingCounterPayment, isAwaitingOnlinePayment } from '../lib/orderLabels';
 
 interface StepDef {
   status: OrderStatus;
@@ -87,9 +87,15 @@ export default function OrderTimeline({
     payment_status: paymentStatus,
     total,
   });
+  const awaitingOnlinePayment = isAwaitingOnlinePayment({
+    payment_method: paymentMethod,
+    payment_provider: paymentProvider,
+    payment_status: paymentStatus,
+    total,
+  });
   const pickupStepsForMode: StepDef[] = isDineIn
     ? [
-        { status: 'pending', label: awaitingCounterPayment ? 'Payment Pending' : 'Order Placed', icon: Clock },
+        { status: 'pending', label: awaitingCounterPayment ? 'Payment Pending' : awaitingOnlinePayment ? 'Payment Processing' : 'Order Placed', icon: Clock },
         { status: 'confirmed', label: 'Confirmed', icon: Check },
         { status: 'preparing', label: 'Preparing', icon: ChefHat },
         { status: 'packed', label: 'Ready to Serve', icon: Bell },
@@ -98,9 +104,16 @@ export default function OrderTimeline({
     : pickupSteps.map((step) => (
         step.status === 'pending' && awaitingCounterPayment
           ? { ...step, label: 'Payment Pending' }
+          : step.status === 'pending' && awaitingOnlinePayment
+            ? { ...step, label: 'Payment Processing' }
           : step
       ));
-  const steps = isPickup ? pickupStepsForMode : deliverySteps;
+  const deliveryStepsForMode = deliverySteps.map((step) => (
+    step.status === 'pending' && awaitingOnlinePayment
+      ? { ...step, label: 'Payment Processing' }
+      : step
+  ));
+  const steps = isPickup ? pickupStepsForMode : deliveryStepsForMode;
   const idxMap = isPickup ? pickupStatusIndex : statusIndex;
   const currentIdx = idxMap[currentStatus] ?? 0;
 
@@ -149,9 +162,16 @@ export default function OrderTimeline({
                 {isCurrent && !isReadyPickup && awaitingCounterPayment && step.status === 'pending' && (
                   <p className="text-[12px] text-amber-400 font-semibold mt-0.5">Pay at the counter to continue</p>
                 )}
+                {isCurrent && !isReadyPickup && awaitingOnlinePayment && step.status === 'pending' && (
+                  <p className="text-[12px] text-sky-400 font-semibold mt-0.5">Confirming your online payment</p>
+                )}
                 {isCurrent && !isReadyPickup && (
                   <p className="text-[12px] text-brand-gold font-semibold mt-0.5 animate-pulse-soft">
-                    {awaitingCounterPayment && step.status === 'pending' ? 'Awaiting Payment Confirmation' : 'In Progress'}
+                    {awaitingCounterPayment && step.status === 'pending'
+                      ? 'Awaiting Payment Confirmation'
+                      : awaitingOnlinePayment && step.status === 'pending'
+                        ? 'Payment Verification In Progress'
+                        : 'In Progress'}
                   </p>
                 )}
               </div>

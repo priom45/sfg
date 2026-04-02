@@ -24,6 +24,11 @@ export default function ProductCard({ item, onImageClick, onAdd }: ProductCardPr
   }, [item.image_url]);
 
   function handleIncrement() {
+    if (!item.is_available) {
+      showToast(`${item.name} is currently out of stock`, 'error');
+      return;
+    }
+
     if (totalQty === 0) {
       onAdd(item);
     } else {
@@ -142,8 +147,9 @@ export default function ProductCard({ item, onImageClick, onAdd }: ProductCardPr
                     event.stopPropagation();
                     handleIncrement();
                   }}
+                  disabled={!item.is_available}
                   whileTap={{ scale: 0.85 }}
-                  className="w-8 h-8 flex items-center justify-center text-brand-gold hover:bg-brand-gold/10 transition-colors"
+                  className="w-8 h-8 flex items-center justify-center text-brand-gold hover:bg-brand-gold/10 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
                 >
                   <Plus size={16} strokeWidth={2.5} />
                 </motion.button>

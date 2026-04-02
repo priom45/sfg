@@ -3,13 +3,15 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { CheckCircle, Clock, Copy, RotateCcw, Store, Truck, ChefHat, Users, Bell, Sparkles, ArrowRight, Star, Wallet, Package, XCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clearCheckoutSuccessOrder } from '../lib/checkoutSuccess';
+import { clearPendingOnlineOrder, readPendingOnlineOrder } from '../lib/pendingOnlineOrder';
 import { supabase } from '../lib/supabase';
-import { getPaymentMethodLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment } from '../lib/orderLabels';
-import { RAZORPAY_BRAND_IMAGE, createExistingRazorpayOrder, loadRazorpayScript, verifyRazorpayPayment } from '../lib/razorpay';
+import { getPaymentMethodLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment } from '../lib/orderLabels';
+import { RAZORPAY_BRAND_IMAGE, createExistingRazorpayOrder, loadRazorpayScript, reconcileRazorpayPayment, verifyRazorpayPayment } from '../lib/razorpay';
 import type { Order, MenuItem } from '../types';
 import { useToast } from '../components/Toast';
 import { playOrderSound, playOrderCompleteSound, playPickupReadyAlert } from '../lib/sounds';
 import { useAuth } from '../contexts/AuthContext';
+import { useCart } from '../contexts/CartContext';
 import { staggerContainer, staggerChild } from '../lib/animations';
 
 const SESSION_KEYWORDS = ['session expired', 'sign in again', 'please sign in', 'authentication failed'];
@@ -21,9 +23,12 @@ export default function OrderSuccessPage() {
   const [loading, setLoading] = useState(true);
   const [specials, setSpecials] = useState<MenuItem[]>([]);
   const [payingOnline, setPayingOnline] = useState(false);
+  const [reconcilingPayment, setReconcilingPayment] = useState(false);
   const { showToast } = useToast();
   const prevStatusRef = useRef<string | null>(null);
   const pickupAlertPlayedRef = useRef(false);
+  const reconciledPendingOrderRef = useRef<string | null>(null);
+  const { clearCart } = useCart();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -136,11 +141,85 @@ export default function OrderSuccessPage() {
   }, [order, showToast]);
 
   useEffect(() => {
+    if (!order) return;
+
+    const pendingRecoveryOrderId = readPendingOnlineOrder();
+    if (pendingRecoveryOrderId !== order.order_id) {
+      if (order.payment_status === 'failed' || order.status === 'cancelled' || order.status === 'expired') {
+        clearPendingOnlineOrder(order.order_id);
+      }
+      return;
+    }
+
+    if (order.payment_provider === 'razorpay' && order.payment_status === 'paid') {
+      clearPendingOnlineOrder(order.order_id);
+      clearCart();
+      return;
+    }
+
+    if (order.payment_status === 'failed' || order.status === 'cancelled' || order.status === 'expired') {
+      clearPendingOnlineOrder(order.order_id);
+    }
+  }, [clearCart, order]);
+
+  useEffect(() => {
     if (!order || !isAwaitingCounterPayment(order)) return;
     void loadRazorpayScript().catch((error) => {
       console.error('Failed to preload Razorpay checkout', error);
     });
   }, [order]);
+
+  useEffect(() => {
+    if (!order || !isAwaitingOnlinePayment(order)) {
+      setReconcilingPayment(false);
+      return;
+    }
+
+    if (reconciledPendingOrderRef.current === order.order_id) {
+      return;
+    }
+
+    reconciledPendingOrderRef.current = order.order_id;
+    setReconcilingPayment(true);
+
+    void (async () => {
+      try {
+        const reconciliation = await reconcileRazorpayPayment(order.order_id);
+
+        if (reconciliation.paymentState === 'paid') {
+          setOrder((currentOrder) => currentOrder && currentOrder.order_id === order.order_id
+            ? {
+                ...currentOrder,
+                payment_status: 'paid',
+                payment_provider: 'razorpay',
+                payment_method: reconciliation.paymentMethod ?? currentOrder.payment_method,
+                status: (reconciliation.orderStatus as Order['status'] | undefined) ?? currentOrder.status,
+              }
+            : currentOrder);
+          showToast('Payment confirmed');
+          return;
+        }
+
+        if (reconciliation.paymentState === 'failed') {
+          clearPendingOnlineOrder(order.order_id);
+          setOrder((currentOrder) => currentOrder && currentOrder.order_id === order.order_id
+            ? {
+                ...currentOrder,
+                payment_status: 'failed',
+                status: reconciliation.orderStatus === 'expired'
+                  ? 'expired'
+                  : (reconciliation.orderStatus as Order['status'] | undefined) ?? currentOrder.status,
+              }
+            : currentOrder);
+          showToast('We could not confirm this payment.', 'error');
+        }
+      } catch (reconciliationError) {
+        console.error('Failed to reconcile Razorpay payment', reconciliationError);
+      } finally {
+        setReconcilingPayment(false);
+      }
+    })();
+  }, [order, showToast]);
 
   function copyOrderId() {
     if (order) {
@@ -273,8 +352,9 @@ export default function OrderSuccessPage() {
   const isCancelled = order.status === 'cancelled';
   const isPending = order.status === 'pending';
   const isPickup = order.order_type === 'pickup';
+  const isOnlinePaymentPending = isAwaitingOnlinePayment(order);
   const isCounterPaymentPending = isAwaitingCounterPayment(order);
-  const isQueuePending = isPending && !isCounterPaymentPending;
+  const isQueuePending = isPending && !isCounterPaymentPending && !isOnlinePaymentPending;
   const isPreparing = order.status === 'preparing';
   const isPickupReady = isPickup && order.status === 'packed';
   const isDeliveryPacked = !isPickup && order.status === 'packed';
@@ -331,6 +411,25 @@ export default function OrderSuccessPage() {
             <h1 className="text-2xl font-extrabold tracking-tight text-white mb-2">Your Order is Being Prepared!</h1>
             <p className="text-brand-text-muted mb-8">
               Our chef is making your order fresh. {order.estimated_minutes ? `Please wait about ${order.estimated_minutes} minutes.` : ''}
+            </p>
+          </motion.div>
+        )}
+
+        {isOnlinePaymentPending && (
+          <motion.div key="online-payment-pending" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }}>
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+              className="w-20 h-20 bg-sky-500/10 border border-sky-500/20 rounded-full flex items-center justify-center mx-auto mb-6"
+            >
+              <Clock size={40} className={`${reconcilingPayment ? 'text-sky-400 animate-spin' : 'text-sky-400'}`} />
+            </motion.div>
+            <h1 className="text-2xl font-extrabold tracking-tight text-white mb-2">Payment Processing</h1>
+            <p className="text-brand-text-muted mb-8">
+              {reconcilingPayment
+                ? 'We are checking your Razorpay payment now. If money was debited, your order will update automatically.'
+                : 'Your payment is still being verified. If money was debited, no further action is needed.'}
             </p>
           </motion.div>
         )}
@@ -456,7 +555,7 @@ export default function OrderSuccessPage() {
           )}
 
           <p className="text-[12px] font-semibold text-brand-text-dim uppercase tracking-wider mb-2">
-            {isPickup ? 'Show this at the counter' : 'Order ID'}
+            {isPickup && !isOnlinePaymentPending ? 'Show this at the counter' : 'Order ID'}
           </p>
           <div className="flex items-center justify-center gap-3">
             <span className={`font-black tracking-wider tabular-nums ${
@@ -473,6 +572,13 @@ export default function OrderSuccessPage() {
             <div className="mt-4 flex items-center justify-center gap-2 bg-amber-500/10 rounded-2xl px-4 py-3 border border-amber-500/20">
               <Wallet size={16} className="text-amber-400" />
               <span className="text-[14px] font-bold text-amber-400">Payment pending at the counter.</span>
+            </div>
+          )}
+
+          {isOnlinePaymentPending && (
+            <div className="mt-4 flex items-center justify-center gap-2 bg-sky-500/10 rounded-2xl px-4 py-3 border border-sky-500/20">
+              <Clock size={16} className={`${reconcilingPayment ? 'text-sky-400 animate-spin' : 'text-sky-400'}`} />
+              <span className="text-[14px] font-bold text-sky-400">Online payment verification in progress.</span>
             </div>
           )}
 
@@ -514,6 +620,14 @@ export default function OrderSuccessPage() {
             <div className="mt-4 bg-amber-500/5 rounded-2xl px-4 py-3">
               <p className="text-[14px] text-brand-text-muted font-semibold">
                 Tell the staff your order ID and complete payment at the counter, or use the online payment option below. Your order will move to the queue once payment is confirmed.
+              </p>
+            </div>
+          )}
+
+          {isOnlinePaymentPending && (
+            <div className="mt-4 bg-sky-500/5 rounded-2xl px-4 py-3">
+              <p className="text-[14px] text-brand-text-muted font-semibold">
+                We are confirming your Razorpay payment with the server. If the amount was debited, this order will move into the kitchen queue automatically.
               </p>
             </div>
           )}

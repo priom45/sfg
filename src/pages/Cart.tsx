@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Minus, Plus, Trash2, ShoppingBag, ArrowLeft, Tag, User, Pencil, Store, Wallet, CreditCard } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -19,6 +19,7 @@ import {
 } from '../lib/offers';
 import { customerSupabase } from '../lib/supabase';
 import { readCheckoutSuccessOrder, storeCheckoutSuccessOrder } from '../lib/checkoutSuccess';
+import { clearPendingOnlineOrder, readPendingOnlineOrder, storePendingOnlineOrder } from '../lib/pendingOnlineOrder';
 import { getServiceModeLabel } from '../lib/orderLabels';
 import { menuItemSupportsCustomizations } from '../lib/menuItems';
 import { fetchCustomizationAvailability, itemHasAssignedCustomizations, type CustomizationAvailability } from '../lib/customizations';
@@ -63,8 +64,11 @@ export default function CartPage() {
   } | null>(null);
   const [offerMenuItemsById, setOfferMenuItemsById] = useState<Record<string, OfferMenuCatalogItem>>({});
   const [offerCategoryNamesById, setOfferCategoryNamesById] = useState<Record<string, string>>({});
+  const [menuCatalogLoaded, setMenuCatalogLoaded] = useState(false);
   const [customizationAvailability, setCustomizationAvailability] = useState<CustomizationAvailability | null>(null);
   const pendingSuccessOrderId = readCheckoutSuccessOrder();
+  const pendingOnlineOrderId = readPendingOnlineOrder();
+  const activeCheckoutOrderId = pendingSuccessOrderId || pendingOnlineOrderId;
 
   useEffect(() => {
     if (profile) {
@@ -74,13 +78,9 @@ export default function CartPage() {
   }, [profile, name, phone]);
 
   useEffect(() => {
-    if (items.length > 0 || !pendingSuccessOrderId) return;
-    navigate(`/order-success/${pendingSuccessOrderId}`, { replace: true });
-  }, [items.length, navigate, pendingSuccessOrderId]);
-
-  useEffect(() => {
-    void loadActiveOffers();
-  }, []);
+    if (!activeCheckoutOrderId) return;
+    navigate(`/order-success/${activeCheckoutOrderId}`, { replace: true });
+  }, [activeCheckoutOrderId, navigate]);
 
   useEffect(() => {
     void (async () => {
@@ -92,9 +92,10 @@ export default function CartPage() {
     })();
   }, []);
 
-  async function loadActiveOffers() {
+  const loadActiveOffers = useCallback(async () => {
+    setMenuCatalogLoaded(false);
     const now = new Date().toISOString();
-    const [{ data: offersData }, { data: menuItemsData }, { data: categoriesData }] = await Promise.all([
+    const [offersRes, menuItemsRes, categoriesRes] = await Promise.all([
       customerSupabase
         .from('offers')
         .select('*')
@@ -110,9 +111,19 @@ export default function CartPage() {
         .select('id, name'),
     ]);
 
-    setActiveOffers((offersData || []).filter(isOfferCartEligible));
+    if (offersRes.error) {
+      showToast(offersRes.error.message || 'Failed to load offers', 'error');
+    }
+    if (menuItemsRes.error) {
+      showToast(menuItemsRes.error.message || 'Failed to validate current menu availability', 'error');
+    }
+    if (categoriesRes.error) {
+      showToast(categoriesRes.error.message || 'Failed to load offer categories', 'error');
+    }
+
+    setActiveOffers((offersRes.data || []).filter(isOfferCartEligible));
     setOfferMenuItemsById(
-      (menuItemsData || []).reduce<Record<string, OfferMenuCatalogItem>>((acc, item) => {
+      (menuItemsRes.data || []).reduce<Record<string, OfferMenuCatalogItem>>((acc, item) => {
         if (item.is_available !== false) {
           acc[item.id] = item;
         }
@@ -120,12 +131,17 @@ export default function CartPage() {
       }, {}),
     );
     setOfferCategoryNamesById(
-      (categoriesData || []).reduce<Record<string, string>>((acc, category) => {
+      (categoriesRes.data || []).reduce<Record<string, string>>((acc, category) => {
         acc[category.id] = category.name;
         return acc;
       }, {}),
     );
-  }
+    setMenuCatalogLoaded(!menuItemsRes.error);
+  }, [showToast]);
+
+  useEffect(() => {
+    void loadActiveOffers();
+  }, [loadActiveOffers]);
 
   async function applyCoupon() {
     setCouponError('');
@@ -263,6 +279,32 @@ export default function CartPage() {
     }
   }, [activeOffers, addOnTotal, appliedOffer, itemCount, items, offerCategoryNamesById, offerMenuItemsById, subtotal]);
 
+  useEffect(() => {
+    if (!menuCatalogLoaded || items.length === 0) {
+      return;
+    }
+
+    const unavailableCartItems = items.filter((item) => !offerMenuItemsById[item.menu_item.id]);
+
+    if (unavailableCartItems.length === 0) {
+      return;
+    }
+
+    unavailableCartItems.forEach((item) => removeItem(item.id));
+
+    if (editingItem && unavailableCartItems.some((item) => item.id === editingItem.cartItemId)) {
+      setEditingItem(null);
+    }
+
+    const unavailableNames = Array.from(new Set(unavailableCartItems.map((item) => item.menu_item.name)));
+    showToast(
+      unavailableNames.length === 1
+        ? `${unavailableNames[0]} is out of stock and was removed from your cart`
+        : `${unavailableNames.length} out-of-stock items were removed from your cart`,
+      'error',
+    );
+  }, [editingItem, items, menuCatalogLoaded, offerMenuItemsById, removeItem, showToast]);
+
   function getCustomerEmail() {
     return profile?.email?.trim() || user?.email?.trim() || '';
   }
@@ -280,6 +322,21 @@ export default function CartPage() {
     }
   }
 
+  function redirectToVerifiedOrder(orderId: string, message = 'Order placed successfully') {
+    clearPendingOnlineOrder(orderId);
+    storeCheckoutSuccessOrder(orderId);
+    showToast(message);
+    playOrderSound();
+    navigate(`/order-success/${orderId}`, { replace: true });
+    clearCart();
+  }
+
+  function redirectToPendingOrder(orderId: string, message = 'Payment is being verified. We will update your order shortly.') {
+    storePendingOnlineOrder(orderId);
+    showToast(message);
+    navigate(`/order-success/${orderId}`, { replace: true });
+  }
+
   async function startRazorpayCheckout(customerEmail: string) {
     const razorpayScriptPromise = loadRazorpayScript();
     const razorpayOrder = await createRazorpayOrder({
@@ -292,6 +349,7 @@ export default function CartPage() {
       total,
       items: checkoutItems,
     });
+    storePendingOnlineOrder(razorpayOrder.appOrderId);
 
     try {
       await razorpayScriptPromise;
@@ -303,6 +361,31 @@ export default function CartPage() {
 
       await new Promise<void>((resolve, reject) => {
         let paymentFinalized = false;
+
+        const resolveCheckoutState = async (fallbackMessage: string) => {
+          try {
+            const cancellation = await cancelRazorpayPayment(razorpayOrder.appOrderId);
+
+            if (cancellation.paymentState === 'paid') {
+              redirectToVerifiedOrder(cancellation.appOrderId || razorpayOrder.appOrderId);
+              resolve();
+              return;
+            }
+
+            if (cancellation.paymentState === 'pending') {
+              redirectToPendingOrder(cancellation.appOrderId || razorpayOrder.appOrderId);
+              resolve();
+              return;
+            }
+
+            clearPendingOnlineOrder(razorpayOrder.appOrderId);
+            reject(new Error(fallbackMessage));
+          } catch (cancelError) {
+            console.error('Failed to resolve Razorpay cancellation state', cancelError);
+            clearPendingOnlineOrder(razorpayOrder.appOrderId);
+            reject(new Error(fallbackMessage));
+          }
+        };
 
         const checkout = new RazorpayCheckout({
           key: razorpayOrder.keyId,
@@ -331,10 +414,8 @@ export default function CartPage() {
             confirm_close: true,
             ondismiss: () => {
               if (paymentFinalized) return;
-              void cancelRazorpayPayment(razorpayOrder.appOrderId).catch((cancelError) => {
-                console.error('Failed to cancel pending Razorpay order', cancelError);
-              });
-              reject(new Error('Payment cancelled'));
+              paymentFinalized = true;
+              void resolveCheckoutState('Payment cancelled');
             },
           },
           handler: (response) => {
@@ -350,15 +431,24 @@ export default function CartPage() {
                 });
 
                 const successfulOrderId = verification.appOrderId || razorpayOrder.appOrderId;
-                storeCheckoutSuccessOrder(successfulOrderId);
-                showToast('Order placed successfully');
-                playOrderSound();
-                navigate(`/order-success/${successfulOrderId}`, { replace: true });
-                clearCart();
+                if (verification.paymentState === 'failed') {
+                  clearPendingOnlineOrder(successfulOrderId);
+                  reject(new Error(verification.error || 'Payment verification failed'));
+                  return;
+                }
+
+                if (verification.paymentState === 'pending') {
+                  redirectToPendingOrder(successfulOrderId);
+                  resolve();
+                  return;
+                }
+
+                redirectToVerifiedOrder(successfulOrderId);
                 resolve();
               } catch (verificationError) {
                 console.error('Failed to verify Razorpay payment', verificationError);
-                reject(verificationError instanceof Error ? verificationError : new Error('Payment verification failed'));
+                redirectToPendingOrder(razorpayOrder.appOrderId, 'Payment received. We are verifying your order.');
+                resolve();
               }
             })();
           },
@@ -367,18 +457,28 @@ export default function CartPage() {
         checkout.on('payment.failed', (failure) => {
           if (paymentFinalized) return;
           paymentFinalized = true;
-          void cancelRazorpayPayment(razorpayOrder.appOrderId).catch((cancelError) => {
-            console.error('Failed to cancel failed Razorpay payment', cancelError);
-          });
-          reject(new Error(failure.error?.description || 'Payment failed'));
+          void resolveCheckoutState(failure.error?.description || 'Payment failed');
         });
 
         checkout.open();
       });
     } catch (razorpayCheckoutError) {
-      await cancelRazorpayPayment(razorpayOrder.appOrderId).catch((cancelError) => {
+      const cancellation = await cancelRazorpayPayment(razorpayOrder.appOrderId).catch((cancelError) => {
         console.error('Failed to cancel Razorpay order after checkout setup error', cancelError);
+        return null;
       });
+
+      if (cancellation?.paymentState === 'paid') {
+        redirectToVerifiedOrder(cancellation.appOrderId || razorpayOrder.appOrderId);
+        return;
+      }
+
+      if (cancellation?.paymentState === 'pending') {
+        redirectToPendingOrder(cancellation.appOrderId || razorpayOrder.appOrderId);
+        return;
+      }
+
+      clearPendingOnlineOrder(razorpayOrder.appOrderId);
       throw razorpayCheckoutError;
     }
   }
@@ -456,7 +556,7 @@ export default function CartPage() {
   }
 
   if (items.length === 0) {
-    if (pendingSuccessOrderId) {
+    if (activeCheckoutOrderId) {
       return (
         <div className="min-h-[60vh] flex flex-col items-center justify-center section-padding bg-brand-bg">
           <div className="w-24 h-24 bg-brand-surface rounded-full flex items-center justify-center mb-6">

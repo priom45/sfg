@@ -1,6 +1,10 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
-import { createHmac } from "node:crypto";
+import {
+  loadRazorpayEnv,
+  resolvePaymentByPaymentId,
+  verifyCheckoutSignature,
+} from "../_shared/razorpay.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -16,133 +20,11 @@ interface VerifyBody {
   razorpaySignature?: string;
 }
 
-interface RazorpayPayment {
-  id: string;
-  amount: number;
-  currency: string;
-  status: string;
-  method: string;
-  order_id: string;
-}
-
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
-}
-
-async function fetchRazorpayPayment(
-  keyId: string,
-  keySecret: string,
-  paymentId: string,
-) {
-  const response = await fetch(`https://api.razorpay.com/v1/payments/${paymentId}`, {
-    headers: {
-      Authorization: `Basic ${btoa(`${keyId}:${keySecret}`)}`,
-    },
-  });
-
-  const payload = await response.json();
-
-  if (!response.ok) {
-    const message =
-      typeof payload?.error?.description === "string"
-        ? payload.error.description
-        : typeof payload?.error?.message === "string"
-          ? payload.error.message
-          : "Failed to fetch Razorpay payment";
-    throw new Error(message);
-  }
-
-  return payload as RazorpayPayment;
-}
-
-async function captureRazorpayPayment(
-  keyId: string,
-  keySecret: string,
-  paymentId: string,
-  amount: number,
-) {
-  const response = await fetch(`https://api.razorpay.com/v1/payments/${paymentId}/capture`, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${btoa(`${keyId}:${keySecret}`)}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      amount,
-      currency: "INR",
-    }),
-  });
-
-  const payload = await response.json();
-
-  if (!response.ok) {
-    const message =
-      typeof payload?.error?.description === "string"
-        ? payload.error.description
-        : typeof payload?.error?.message === "string"
-          ? payload.error.message
-          : "Failed to capture Razorpay payment";
-    throw new Error(message);
-  }
-
-  return payload as RazorpayPayment;
-}
-
-function verifySignature(
-  razorpayOrderId: string,
-  razorpayPaymentId: string,
-  razorpaySignature: string,
-  secret: string,
-) {
-  const expectedSignature = createHmac("sha256", secret)
-    .update(`${razorpayOrderId}|${razorpayPaymentId}`)
-    .digest("hex");
-
-  return expectedSignature === razorpaySignature;
-}
-
-async function requestReceiptEmail(
-  supabaseUrl: string,
-  anonKey: string,
-  serviceKey: string,
-  orderId: string,
-) {
-  const response = await fetch(`${supabaseUrl}/functions/v1/send-order-receipt`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${serviceKey}`,
-      apikey: anonKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ orderId }),
-  });
-
-  if (!response.ok) {
-    let receiptError = "Failed to send receipt email";
-
-    try {
-      const payload = await response.clone().json() as { error?: string; message?: string };
-      if (typeof payload.error === "string" && payload.error.trim()) {
-        receiptError = payload.error;
-      } else if (typeof payload.message === "string" && payload.message.trim()) {
-        receiptError = payload.message;
-      }
-    } catch {
-      try {
-        const text = await response.text();
-        if (text.trim()) {
-          receiptError = text.trim();
-        }
-      } catch {
-        // Ignore fallback parsing failures.
-      }
-    }
-
-    throw new Error(receiptError);
-  }
 }
 
 Deno.serve(async (req: Request) => {
@@ -170,21 +52,13 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: false, error: "Payment verification details are required" }, 400);
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const razorpayKeyId = Deno.env.get("RAZORPAY_KEY_ID")?.trim();
-    const razorpaySecret = Deno.env.get("RAZORPAY_SECRET")?.trim();
+    const env = loadRazorpayEnv();
 
-    if (!razorpayKeyId || !razorpaySecret) {
-      return jsonResponse({ success: false, error: "Razorpay is not configured" }, 500);
-    }
-
-    const userClient = createClient(supabaseUrl, anonKey, {
+    const userClient = createClient(env.supabaseUrl, env.anonKey, {
       auth: { autoRefreshToken: false, persistSession: false },
       global: { headers: { Authorization: authHeader } },
     });
-    const adminClient = createClient(supabaseUrl, serviceKey, {
+    const adminClient = createClient(env.supabaseUrl, env.serviceKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
@@ -199,7 +73,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: order, error: orderError } = await adminClient
       .from("orders")
-      .select("id, order_id, user_id, razorpay_order_id, payment_status, payment_provider")
+      .select("id, order_id, user_id, razorpay_order_id, payment_status, payment_provider, payment_method, razorpay_payment_id, razorpay_signature, payment_verified_at, status")
       .eq("order_id", appOrderId)
       .maybeSingle();
 
@@ -219,59 +93,40 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: false, error: "Razorpay order mismatch" }, 400);
     }
 
-    if (!verifySignature(order.razorpay_order_id, razorpayPaymentId, razorpaySignature, razorpaySecret)) {
+    if (!verifyCheckoutSignature(order.razorpay_order_id, razorpayPaymentId, razorpaySignature, env.razorpaySecret)) {
       return jsonResponse({ success: false, error: "Invalid Razorpay signature" }, 400);
     }
 
-    let payment = await fetchRazorpayPayment(razorpayKeyId, razorpaySecret, razorpayPaymentId);
+    const resolution = await resolvePaymentByPaymentId(
+      adminClient,
+      env,
+      order,
+      razorpayPaymentId,
+      razorpaySignature,
+    );
 
-    if (payment.order_id !== order.razorpay_order_id) {
-      return jsonResponse({ success: false, error: "Payment does not belong to this order" }, 400);
-    }
-
-    if (payment.status === "authorized") {
-      payment = await captureRazorpayPayment(
-        razorpayKeyId,
-        razorpaySecret,
-        razorpayPaymentId,
-        payment.amount,
+    if (!resolution.success) {
+      return jsonResponse(
+        {
+          success: false,
+          appOrderId: resolution.appOrderId,
+          paymentState: resolution.paymentState,
+          orderStatus: resolution.orderStatus,
+          paymentMethod: resolution.paymentMethod,
+          error: resolution.error || "Payment could not be verified",
+          manualReview: resolution.manualReview,
+        },
+        resolution.manualReview ? 409 : 400,
       );
     }
 
-    if (payment.status !== "captured") {
-      return jsonResponse({ success: false, error: "Payment is not captured yet" }, 400);
-    }
-
-    const paymentMethod = payment.method === "upi" ? "upi" : "card";
-
-    const { error: updateError } = await adminClient
-      .from("orders")
-      .update({
-        payment_provider: "razorpay",
-        payment_status: "paid",
-        payment_method: paymentMethod,
-        razorpay_payment_id: razorpayPaymentId,
-        razorpay_signature: razorpaySignature,
-        payment_verified_at: new Date().toISOString(),
-      })
-      .eq("id", order.id);
-
-    if (updateError) {
-      throw updateError;
-    }
-
-    EdgeRuntime.waitUntil(
-      requestReceiptEmail(supabaseUrl, anonKey, serviceKey, order.order_id)
-        .catch((receiptError) => {
-          console.error("Failed to send payment receipt email", receiptError);
-        }),
-    );
-
     return jsonResponse({
       success: true,
-      appOrderId: order.order_id,
-      paymentMethod,
-      receiptEmailSent: true,
+      appOrderId: resolution.appOrderId,
+      paymentState: resolution.paymentState,
+      orderStatus: resolution.orderStatus,
+      paymentMethod: resolution.paymentMethod,
+      receiptEmailSent: resolution.receiptEmailSent,
     });
   } catch (error) {
     return jsonResponse(

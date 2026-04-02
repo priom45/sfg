@@ -1,11 +1,12 @@
 import { Link, useLocation } from 'react-router-dom';
-import { Home, UtensilsCrossed, Package, User } from 'lucide-react';
+import { Home, Percent, UtensilsCrossed, Package, User } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAuth } from '../contexts/AuthContext';
 
 const tabs = [
   { to: '/', icon: Home, label: 'Home' },
   { to: '/menu', icon: UtensilsCrossed, label: 'Menu' },
+  { to: '/offers', icon: Percent, label: 'Offers' },
   { to: '/my-orders', icon: Package, label: 'Orders' },
   { to: '/auth', icon: User, label: 'Profile' },
 ];
@@ -39,7 +40,7 @@ export default function BottomNav() {
             <Link
               key={tab.label}
               to={to}
-              className={`flex flex-col items-center justify-center gap-1 w-[72px] py-2 rounded-xl transition-colors ${
+              className={`flex flex-1 flex-col items-center justify-center gap-1 rounded-xl py-2 transition-colors ${
                 active
                   ? 'text-brand-gold'
                   : 'text-brand-text-dim hover:text-brand-text-muted'

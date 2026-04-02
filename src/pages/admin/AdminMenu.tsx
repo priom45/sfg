@@ -131,7 +131,13 @@ export default function AdminMenu() {
     itemFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [editing]);
 
-  const visibleItems = items.filter((item) => item.is_available);
+  const sortedItems = [...items].sort((a, b) => {
+    if (a.is_available !== b.is_available) {
+      return Number(b.is_available) - Number(a.is_available);
+    }
+
+    return a.display_order - b.display_order;
+  });
 
   async function saveItem() {
     if (!editing) return;
@@ -209,6 +215,21 @@ export default function AdminMenu() {
       return;
     }
     showToast('Item deleted');
+    await loadData();
+  }
+
+  async function toggleItemAvailability(item: MenuItem, nextAvailability: boolean) {
+    const { error } = await supabase
+      .from('menu_items')
+      .update({ is_available: nextAvailability })
+      .eq('id', item.id);
+
+    if (error) {
+      showToast(error.message || `Failed to mark ${item.name} as ${nextAvailability ? 'in stock' : 'out of stock'}`, 'error');
+      return;
+    }
+
+    showToast(nextAvailability ? `${item.name} is now in stock` : `${item.name} marked out of stock`);
     await loadData();
   }
 
@@ -358,6 +379,17 @@ export default function AdminMenu() {
             </div>
             <input placeholder="Image URL" value={editing.image_url} onChange={(e) => setEditing({ ...editing, image_url: e.target.value })} className="input-field" />
             <textarea placeholder="Description" value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} className="input-field resize-none" rows={2} />
+            <label className="flex items-center gap-3 rounded-xl border border-brand-border bg-brand-surface-light/40 px-4 py-3 text-sm text-white">
+              <input
+                type="checkbox"
+                checked={editing.is_available}
+                onChange={(e) => setEditing({ ...editing, is_available: e.target.checked })}
+                className="h-4 w-4 accent-brand-gold"
+              />
+              <span>
+                {editing.is_available ? 'In stock and visible to customers' : 'Out of stock and hidden from customers'}
+              </span>
+            </label>
             <p className="text-sm text-brand-text-muted">
               Add-ons are assigned from the Add-On Management section below.
             </p>
@@ -368,13 +400,13 @@ export default function AdminMenu() {
           </div>
         )}
 
-        {visibleItems.length === 0 ? (
+        {sortedItems.length === 0 ? (
           <div className="bg-brand-surface rounded-xl border border-brand-border p-10 text-center text-brand-text-muted">
             No menu items to show
           </div>
         ) : (
         <div className="space-y-2">
-          {visibleItems.map((item) => (
+          {sortedItems.map((item) => (
             <div key={item.id} className="bg-brand-surface rounded-xl border border-brand-border p-3 flex items-center gap-4">
               <img
                 src={item.image_url || '/image.png'}
@@ -388,10 +420,29 @@ export default function AdminMenu() {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <h3 className="font-bold text-sm truncate text-white">{item.name}</h3>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                      item.is_available
+                        ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
+                        : 'bg-red-500/10 text-red-300 border border-red-500/20'
+                    }`}
+                  >
+                    {item.is_available ? 'In Stock' : 'Out of Stock'}
+                  </span>
                 </div>
                 <p className="text-xs text-brand-text-muted">₹{item.price} &bull; {item.prep_time} min</p>
               </div>
               <div className="flex items-center gap-1">
+                <button
+                  onClick={() => void toggleItemAvailability(item, !item.is_available)}
+                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${
+                    item.is_available
+                      ? 'text-red-300 hover:bg-red-500/10'
+                      : 'text-emerald-300 hover:bg-emerald-500/10'
+                  }`}
+                >
+                  {item.is_available ? 'Mark Out' : 'Mark In'}
+                </button>
                 <button
                   onClick={() => setEditing({
                     id: item.id, name: normalizeItemName(item.name), description: item.description,

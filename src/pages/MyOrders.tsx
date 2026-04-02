@@ -57,9 +57,8 @@ export default function MyOrders() {
     return () => { supabase.removeChannel(channel); };
   }, [user]);
 
-  const visibleOrders = orders.filter((o) => !isAwaitingOnlinePayment(o));
-  const activeOrders = visibleOrders.filter((o) => !['delivered', 'cancelled', 'expired'].includes(o.status));
-  const pastOrders = visibleOrders.filter((o) => ['delivered', 'cancelled', 'expired'].includes(o.status));
+  const activeOrders = orders.filter((o) => !['delivered', 'cancelled', 'expired'].includes(o.status));
+  const pastOrders = orders.filter((o) => ['delivered', 'cancelled', 'expired'].includes(o.status));
 
   if (loading) {
     return (
@@ -92,7 +91,7 @@ export default function MyOrders() {
       <div className="max-w-lg mx-auto px-4 py-6 pb-24 animate-fade-in">
         <h1 className="text-xl font-extrabold text-white mb-5">Orders</h1>
 
-        {visibleOrders.length === 0 ? (
+        {orders.length === 0 ? (
           <div className="text-center py-16">
             <div className="w-20 h-20 bg-brand-surface rounded-full flex items-center justify-center mx-auto mb-5">
               <Package size={32} className="text-brand-text-dim" />
@@ -133,8 +132,11 @@ export default function MyOrders() {
 
 function ActiveOrderCard({ order }: { order: Order }) {
   const isReady = order.status === 'packed' && order.order_type === 'pickup';
+  const isOnlinePaymentPending = isAwaitingOnlinePayment(order);
   const isCounterPaymentPending = isAwaitingCounterPayment(order);
-  const config = isCounterPaymentPending
+  const config = isOnlinePaymentPending
+    ? { color: 'text-sky-400', bg: 'bg-sky-500/10', icon: Clock, label: 'Payment Processing' }
+    : isCounterPaymentPending
     ? { color: 'text-amber-400', bg: 'bg-amber-500/10', icon: Wallet, label: 'Payment Pending' }
     : order.status === 'packed' && order.order_type === 'delivery'
       ? { color: 'text-sky-400', bg: 'bg-sky-500/10', icon: Package, label: 'Packed' }
@@ -170,6 +172,11 @@ function ActiveOrderCard({ order }: { order: Order }) {
             <p className="text-[11px] text-brand-text-dim mt-0.5">
               {formatOrderDate(order.placed_at)} • {getServiceModeLabel(order)}
             </p>
+            {isOnlinePaymentPending && (
+              <p className="text-[11px] text-sky-400 mt-1">
+                We are verifying your online payment
+              </p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">

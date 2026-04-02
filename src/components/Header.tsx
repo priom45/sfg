@@ -8,6 +8,7 @@ import { dropdownVariants } from '../lib/animations';
 const navItems = [
   { to: '/', label: 'Home' },
   { to: '/menu', label: 'Menu' },
+  { to: '/offers', label: 'Offers' },
   { to: '/track', label: 'Track Order' },
   { to: '/about', label: 'About' },
 ];

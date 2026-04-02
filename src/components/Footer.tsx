@@ -20,6 +20,7 @@ export default function Footer() {
             <ul className="space-y-2.5">
               {[
                 { to: '/menu', label: 'Our Menu' },
+                { to: '/offers', label: 'Offers' },
                 { to: '/track', label: 'Track Order' },
                 { to: '/about', label: 'About Us' },
               ].map((link) => (

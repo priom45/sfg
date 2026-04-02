@@ -12,6 +12,7 @@ import RouteSeo from './components/RouteSeo';
 import Home from './pages/Home';
 import Menu from './pages/Menu';
 import Cart from './pages/Cart';
+import Offers from './pages/Offers';
 import OrderSuccess from './pages/OrderSuccess';
 import TrackOrder from './pages/TrackOrder';
 import About from './pages/About';
@@ -129,6 +130,7 @@ export default function App() {
 
                 <Route path="/" element={<CustomerLayout><Home /></CustomerLayout>} />
                 <Route path="/menu" element={<CustomerLayout><Menu /></CustomerLayout>} />
+                <Route path="/offers" element={<CustomerLayout><Offers /></CustomerLayout>} />
                 <Route path="/cart" element={<CustomerLayout><Cart /></CustomerLayout>} />
                 <Route path="/order-success/:orderId" element={<CustomerLayout><OrderSuccess /></CustomerLayout>} />
                 <Route path="/track" element={<CustomerLayout><TrackOrder /></CustomerLayout>} />

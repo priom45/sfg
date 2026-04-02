@@ -1,11 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import {
-  chooseBestRazorpayPayment,
-  fetchRazorpayOrderPayments,
   loadRazorpayEnv,
   markOrderPaymentFailed,
-  resolvePaymentByPaymentId,
+  resolvePaymentForExistingOrder,
 } from "../_shared/razorpay.ts";
 
 const corsHeaders = {
@@ -15,7 +13,7 @@ const corsHeaders = {
     "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-interface CancelBody {
+interface ReconcileBody {
   appOrderId?: string;
 }
 
@@ -41,7 +39,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: false, error: "Missing authorization" }, 401);
     }
 
-    const { appOrderId } = await req.json() as CancelBody;
+    const { appOrderId } = await req.json() as ReconcileBody;
     const normalizedOrderId = appOrderId?.trim() || "";
 
     if (!normalizedOrderId) {
@@ -69,58 +67,44 @@ Deno.serve(async (req: Request) => {
 
     const { data: order, error: orderError } = await adminClient
       .from("orders")
-      .select("id, order_id, user_id, payment_provider, payment_status, payment_method, razorpay_order_id, razorpay_payment_id, razorpay_signature, payment_verified_at, status")
+      .select("id, order_id, user_id, payment_status, payment_provider, payment_method, razorpay_order_id, razorpay_payment_id, razorpay_signature, payment_verified_at, status")
       .eq("order_id", normalizedOrderId)
       .maybeSingle();
 
     if (orderError || !order) {
-      return jsonResponse({ success: true, appOrderId: normalizedOrderId });
+      return jsonResponse({ success: false, error: "Order not found" }, 404);
     }
 
     if (order.user_id !== user.id) {
       return jsonResponse({ success: false, error: "Order access denied" }, 403);
     }
 
-    if (order.payment_provider !== "razorpay" || order.payment_status === "paid") {
+    if (order.payment_provider !== "razorpay") {
+      return jsonResponse({ success: false, error: "Order is not using Razorpay" }, 400);
+    }
+
+    const resolution = await resolvePaymentForExistingOrder(adminClient, env, order);
+
+    if (resolution.paymentState === "failed" && order.payment_status !== "failed") {
+      const failedOrder = await markOrderPaymentFailed(adminClient, order);
       return jsonResponse({
         success: true,
-        appOrderId: order.order_id,
-        paymentState: order.payment_status === "paid" ? "paid" : order.payment_status === "failed" ? "failed" : "pending",
-        orderStatus: order.status,
+        appOrderId: failedOrder.order_id,
+        paymentState: "failed",
+        orderStatus: failedOrder.status,
       });
     }
 
-    if (order.razorpay_order_id) {
-      const payments = await fetchRazorpayOrderPayments(env, order.razorpay_order_id);
-      const bestPayment = chooseBestRazorpayPayment(payments);
-
-      if (bestPayment && !["failed", "refunded"].includes(bestPayment.status)) {
-        const resolution = await resolvePaymentByPaymentId(adminClient, env, order, bestPayment.id);
-
-        return jsonResponse(
-          {
-            success: resolution.success,
-            appOrderId: resolution.appOrderId,
-            paymentState: resolution.paymentState,
-            orderStatus: resolution.orderStatus,
-            paymentMethod: resolution.paymentMethod,
-            receiptEmailSent: resolution.receiptEmailSent,
-            manualReview: resolution.manualReview,
-            error: resolution.error,
-          },
-          resolution.manualReview ? 409 : 200,
-        );
-      }
-    }
-
-    const failedOrder = await markOrderPaymentFailed(adminClient, order);
-
     return jsonResponse({
-      success: true,
-      appOrderId: failedOrder.order_id,
-      paymentState: "failed",
-      orderStatus: failedOrder.status,
-    });
+      success: resolution.success,
+      appOrderId: resolution.appOrderId,
+      paymentState: resolution.paymentState,
+      orderStatus: resolution.orderStatus,
+      paymentMethod: resolution.paymentMethod,
+      receiptEmailSent: resolution.receiptEmailSent,
+      manualReview: resolution.manualReview,
+      error: resolution.error,
+    }, resolution.manualReview ? 409 : 200);
   } catch (error) {
     return jsonResponse(
       {

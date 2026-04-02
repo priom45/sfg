@@ -73,6 +73,42 @@ function roundCurrency(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+async function getUnavailableMenuItemNames(
+  adminClient: ReturnType<typeof createClient>,
+  items: CheckoutItem[],
+) {
+  const menuItemIds = Array.from(
+    new Set(items.map((item) => item.menu_item_id).filter((menuItemId) => typeof menuItemId === "string" && menuItemId.trim())),
+  );
+
+  if (menuItemIds.length === 0) {
+    return [];
+  }
+
+  const { data, error } = await adminClient
+    .from("menu_items")
+    .select("id, name, is_available")
+    .in("id", menuItemIds);
+
+  if (error) {
+    throw error;
+  }
+
+  const menuItemsById = new Map(
+    (data || []).map((item) => [item.id as string, item as { id: string; name: string; is_available: boolean }]),
+  );
+
+  return menuItemIds.flatMap((menuItemId) => {
+    const matchingItem = menuItemsById.get(menuItemId);
+    if (matchingItem && matchingItem.is_available !== false) {
+      return [];
+    }
+
+    const fallbackName = items.find((item) => item.menu_item_id === menuItemId)?.item_name || "Item";
+    return [matchingItem?.name || fallbackName];
+  });
+}
+
 async function createAppOrder(
   adminClient: ReturnType<typeof createClient>,
   orderInsert: AppOrderInsert,
@@ -232,6 +268,17 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({
         success: false,
         error: siteSettings.reopening_text || "Ordering is currently unavailable",
+      }, 409);
+    }
+
+    const unavailableMenuItemNames = await getUnavailableMenuItemNames(adminClient, items);
+
+    if (unavailableMenuItemNames.length > 0) {
+      return jsonResponse({
+        success: false,
+        error: unavailableMenuItemNames.length === 1
+          ? `${unavailableMenuItemNames[0]} is out of stock right now`
+          : `Some items are out of stock right now: ${unavailableMenuItemNames.join(", ")}`,
       }, 409);
     }
 

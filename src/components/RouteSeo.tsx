@@ -205,6 +205,35 @@ function getRouteMetadata(pathname: string, search: string): SeoMetadata {
     };
   }
 
+  if (pathname === '/offers') {
+    return {
+      title: `Offers & Deals | ${seoSiteName}`,
+      description: 'Browse live offers, combo deals, waffle discounts, and current promotions from The Supreme Waffle.',
+      path: '/offers',
+      robots: defaultRobots,
+      keywords: [...seoDefaultKeywords, 'waffle offers', 'dessert deals', 'live food offers Vijayawada'],
+      schema: buildSchemaGraph([
+        {
+          '@type': 'CollectionPage',
+          '@id': buildSeoUrl('/offers#webpage'),
+          url: buildSeoUrl('/offers'),
+          name: `Offers & Deals | ${seoSiteName}`,
+          description: 'Browse live offers, combo deals, waffle discounts, and current promotions from The Supreme Waffle.',
+          isPartOf: {
+            '@id': buildSeoUrl('/#website'),
+          },
+          about: {
+            '@id': buildSeoUrl('/#restaurant'),
+          },
+        },
+        buildBreadcrumbSchema([
+          { name: 'Home', path: '/' },
+          { name: 'Offers', path: '/offers' },
+        ]),
+      ]),
+    };
+  }
+
   if (pathname === '/about') {
     return {
       title: `About Us | ${seoSiteName}`,

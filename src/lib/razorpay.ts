@@ -61,13 +61,33 @@ interface VerifyRazorpayPaymentPayload {
 interface VerifyRazorpayPaymentResponse {
   success: boolean;
   appOrderId?: string;
+  paymentState?: 'paid' | 'pending' | 'failed';
+  orderStatus?: string;
   paymentMethod?: 'upi' | 'card';
+  receiptEmailSent?: boolean;
+  manualReview?: boolean;
   error?: string;
 }
 
 interface CancelRazorpayPaymentResponse {
   success: boolean;
   appOrderId?: string;
+  paymentState?: 'paid' | 'pending' | 'failed';
+  orderStatus?: string;
+  paymentMethod?: 'upi' | 'card';
+  receiptEmailSent?: boolean;
+  manualReview?: boolean;
+  error?: string;
+}
+
+interface ReconcileRazorpayPaymentResponse {
+  success: boolean;
+  appOrderId?: string;
+  paymentState?: 'paid' | 'pending' | 'failed';
+  orderStatus?: string;
+  paymentMethod?: 'upi' | 'card';
+  receiptEmailSent?: boolean;
+  manualReview?: boolean;
   error?: string;
 }
 
@@ -348,6 +368,49 @@ export async function cancelRazorpayPayment(appOrderId: string) {
 
   if (!data?.success) {
     throw new Error(data?.error || 'Failed to cancel Razorpay payment');
+  }
+
+  return data;
+}
+
+export async function reconcileRazorpayPayment(appOrderId: string) {
+  let session = await ensureFreshToken();
+  const { data, error } = await customerSupabase.functions.invoke<ReconcileRazorpayPaymentResponse>(
+    'reconcile-razorpay-payment',
+    {
+      body: { appOrderId },
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    },
+  );
+
+  if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401) {
+    session = await ensureFreshToken({ forceRefresh: true });
+    const retry = await customerSupabase.functions.invoke<ReconcileRazorpayPaymentResponse>(
+      'reconcile-razorpay-payment',
+      {
+        body: { appOrderId },
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      },
+    );
+    if (retry.error) {
+      throw await toRazorpayFunctionError(retry.error, 'Failed to reconcile Razorpay payment');
+    }
+    if (!retry.data?.success) {
+      throw new Error(retry.data?.error || 'Failed to reconcile Razorpay payment');
+    }
+    return retry.data;
+  }
+
+  if (error) {
+    throw await toRazorpayFunctionError(error, 'Failed to reconcile Razorpay payment');
+  }
+
+  if (!data?.success) {
+    throw new Error(data?.error || 'Failed to reconcile Razorpay payment');
   }
 
   return data;
