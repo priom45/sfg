@@ -138,6 +138,18 @@ export default function AdminMenu() {
 
     return a.display_order - b.display_order;
   });
+  const categoryItemCountById = Object.fromEntries(
+    categories.map((category) => [
+      category.id,
+      items.filter((item) => item.category_id === category.id).length,
+    ]),
+  );
+  const categoryAvailableItemCountById = Object.fromEntries(
+    categories.map((category) => [
+      category.id,
+      items.filter((item) => item.category_id === category.id && item.is_available).length,
+    ]),
+  );
 
   async function saveItem() {
     if (!editing) return;
@@ -230,6 +242,35 @@ export default function AdminMenu() {
     }
 
     showToast(nextAvailability ? `${item.name} is now in stock` : `${item.name} marked out of stock`);
+    await loadData();
+  }
+
+  async function toggleCategoryAvailability(category: Category, nextAvailability: boolean) {
+    const categoryItemCount = categoryItemCountById[category.id] || 0;
+
+    if (categoryItemCount === 0) {
+      showToast('This category has no items yet', 'error');
+      return;
+    }
+
+    const { error } = await supabase
+      .from('menu_items')
+      .update({ is_available: nextAvailability })
+      .eq('category_id', category.id);
+
+    if (error) {
+      showToast(
+        error.message || `Failed to mark ${category.name} as ${nextAvailability ? 'in stock' : 'out of stock'}`,
+        'error',
+      );
+      return;
+    }
+
+    showToast(
+      nextAvailability
+        ? `${category.name} is now in stock`
+        : `${category.name} marked out of stock`,
+    );
     await loadData();
   }
 
@@ -339,14 +380,57 @@ export default function AdminMenu() {
           </div>
         )}
 
-        <div className="flex flex-wrap gap-2">
-          {categories.map((cat) => (
-            <div key={cat.id} className="flex items-center gap-2 bg-brand-surface border border-brand-border rounded-lg px-3 py-2 text-sm">
-              <span className="font-medium text-white">{cat.name}</span>
-              <button onClick={() => startCategoryEdit(cat)} className="text-brand-text-dim hover:text-white"><Pencil size={14} /></button>
-              <button onClick={() => deleteCategory(cat.id)} className="text-brand-text-dim hover:text-red-400"><Trash2 size={14} /></button>
-            </div>
-          ))}
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {categories.map((cat) => {
+            const totalItems = categoryItemCountById[cat.id] || 0;
+            const availableItems = categoryAvailableItemCountById[cat.id] || 0;
+            const hasItems = totalItems > 0;
+            const shouldMarkIn = hasItems && availableItems === 0;
+
+            return (
+              <div key={cat.id} className="rounded-xl border border-brand-border bg-brand-surface p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-white">{cat.name}</p>
+                    <p className="mt-1 text-xs text-brand-text-muted">
+                      {hasItems
+                        ? `${availableItems}/${totalItems} item${totalItems === 1 ? '' : 's'} in stock`
+                        : 'No items in this category'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => startCategoryEdit(cat)} className="rounded-lg p-2 text-brand-text-dim transition-colors hover:bg-brand-surface-light/70 hover:text-white"><Pencil size={14} /></button>
+                    <button onClick={() => deleteCategory(cat.id)} className="rounded-lg p-2 text-brand-text-dim transition-colors hover:bg-red-500/10 hover:text-red-400"><Trash2 size={14} /></button>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  <span
+                    className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
+                      hasItems && availableItems > 0
+                        ? 'border border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
+                        : 'border border-red-500/20 bg-red-500/10 text-red-300'
+                    }`}
+                  >
+                    {hasItems && availableItems > 0 ? 'Visible To Customers' : 'Hidden From Customers'}
+                  </span>
+                  <button
+                    onClick={() => void toggleCategoryAvailability(cat, shouldMarkIn)}
+                    disabled={!hasItems}
+                    className={`rounded-lg px-3 py-1.5 text-[11px] font-bold transition-colors ${
+                      !hasItems
+                        ? 'cursor-not-allowed bg-brand-surface-light/40 text-brand-text-dim'
+                        : shouldMarkIn
+                          ? 'text-emerald-300 hover:bg-emerald-500/10'
+                          : 'text-red-300 hover:bg-red-500/10'
+                    }`}
+                  >
+                    {shouldMarkIn ? 'Mark All In' : 'Mark All Out'}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 

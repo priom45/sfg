@@ -167,6 +167,12 @@ export default function CustomizationModal({
     void loadCustomizations();
   }, [loadCustomizations]);
 
+  useEffect(() => {
+    if (item.is_available === false) {
+      onClose();
+    }
+  }, [item.is_available, onClose]);
+
   const selectedPreviewImage = getPreviewImageFromSelections(item, groups, selected);
 
   useEffect(() => {
@@ -206,7 +212,10 @@ export default function CustomizationModal({
   const baseGroup = groups.find((group) => normalizeLabel(group.name) === 'base');
   const selectedBaseId = baseGroup ? (selected[baseGroup.id] || [])[0] : null;
   const selectedBaseName = baseGroup?.options.find((option) => option.id === selectedBaseId)?.name || null;
-  const isUnavailable = item.is_available === false;
+
+  if (item.is_available === false) {
+    return null;
+  }
 
   return (
     <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center">
@@ -397,14 +406,12 @@ export default function CustomizationModal({
 
           <motion.button
             onClick={() => {
-              if (isUnavailable) return;
               onConfirm(item, quantity, getSelectedCustomizations());
             }}
-            disabled={isUnavailable}
-            whileTap={isUnavailable ? undefined : { scale: 0.97 }}
-            className="btn-primary w-full text-center flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
+            whileTap={{ scale: 0.97 }}
+            className="btn-primary w-full text-center flex items-center justify-center gap-2"
           >
-            <span>{isUnavailable ? 'Currently Unavailable' : 'Add to Cart'}</span>
+            <span>Add to Cart</span>
             <span className="font-extrabold">{'\u20B9'}{totalPrice.toFixed(0)}</span>
           </motion.button>
         </div>

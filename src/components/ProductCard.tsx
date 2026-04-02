@@ -3,7 +3,6 @@ import { Clock, Plus, Minus } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { MenuItem } from '../types';
 import { useCart } from '../contexts/CartContext';
-import { useToast } from './Toast';
 
 interface ProductCardProps {
   item: MenuItem;
@@ -13,7 +12,6 @@ interface ProductCardProps {
 
 export default function ProductCard({ item, onImageClick, onAdd }: ProductCardProps) {
   const { items, updateQuantity, removeItem } = useCart();
-  const { showToast } = useToast();
   const [imageSrc, setImageSrc] = useState(item.image_url || '/image.png');
 
   const cartItems = items.filter((ci) => ci.menu_item.id === item.id);
@@ -23,18 +21,16 @@ export default function ProductCard({ item, onImageClick, onAdd }: ProductCardPr
     setImageSrc(item.image_url || '/image.png');
   }, [item.image_url]);
 
-  function handleIncrement() {
-    if (!item.is_available) {
-      showToast(`${item.name} is currently out of stock`, 'error');
-      return;
-    }
+  if (item.is_available === false) {
+    return null;
+  }
 
+  function handleIncrement() {
     if (totalQty === 0) {
       onAdd(item);
     } else {
       const last = cartItems[cartItems.length - 1];
       updateQuantity(last.id, last.quantity + 1);
-      showToast(`${item.name} added to cart`);
     }
   }
 
@@ -49,13 +45,12 @@ export default function ProductCard({ item, onImageClick, onAdd }: ProductCardPr
   }
 
   function openImagePreview() {
-    if (!item.is_available) return;
     onImageClick(item);
   }
 
   return (
     <motion.div
-      className={`card group ${item.is_available ? '' : 'cursor-not-allowed'}`}
+      className="card group"
       whileHover={{ y: -5, boxShadow: '0 10px 26px rgba(8,12,7,0.44), 0 0 1px rgba(216,178,78,0.12)' }}
       whileTap={{ scale: 0.97 }}
       transition={{ duration: 0.25, ease: 'easeOut' }}
@@ -63,9 +58,8 @@ export default function ProductCard({ item, onImageClick, onAdd }: ProductCardPr
       <motion.button
         type="button"
         onClick={openImagePreview}
-        disabled={!item.is_available}
-        whileTap={item.is_available ? { scale: 0.985 } : undefined}
-        className="relative block w-full overflow-hidden bg-brand-surface-light aspect-[5/6] text-left disabled:cursor-not-allowed"
+        whileTap={{ scale: 0.985 }}
+        className="relative block w-full overflow-hidden bg-brand-surface-light aspect-[5/6] text-left"
         aria-label={`Open ${item.name}`}
       >
         <img
@@ -81,11 +75,6 @@ export default function ProductCard({ item, onImageClick, onAdd }: ProductCardPr
           className="h-full w-full object-cover transition-transform duration-700 ease-out group-hover:scale-[1.03]"
         />
         <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-brand-overlay to-transparent" />
-        {!item.is_available && (
-          <div className="absolute inset-0 bg-brand-overlay backdrop-blur-[2px] flex items-center justify-center">
-            <span className="text-white font-bold text-[14px] bg-brand-overlay-soft px-4 py-2 rounded-lg">Sold Out</span>
-          </div>
-        )}
       </motion.button>
 
       <div className="p-3">
@@ -147,9 +136,8 @@ export default function ProductCard({ item, onImageClick, onAdd }: ProductCardPr
                     event.stopPropagation();
                     handleIncrement();
                   }}
-                  disabled={!item.is_available}
                   whileTap={{ scale: 0.85 }}
-                  className="w-8 h-8 flex items-center justify-center text-brand-gold hover:bg-brand-gold/10 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
+                  className="w-8 h-8 flex items-center justify-center text-brand-gold hover:bg-brand-gold/10 transition-colors"
                 >
                   <Plus size={16} strokeWidth={2.5} />
                 </motion.button>
@@ -161,15 +149,13 @@ export default function ProductCard({ item, onImageClick, onAdd }: ProductCardPr
                   event.stopPropagation();
                   onAdd(item);
                 }}
-                disabled={!item.is_available}
                 initial={{ scale: 0.8, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.8, opacity: 0 }}
                 whileTap={{ scale: 0.9 }}
                 transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
                 className="border-2 border-brand-gold text-brand-gold text-[13px] font-extrabold px-4 py-1.5 rounded-lg
-                           hover:bg-brand-gold hover:text-brand-bg transition-all
-                           disabled:opacity-30 disabled:cursor-not-allowed"
+                           hover:bg-brand-gold hover:text-brand-bg transition-all"
               >
                 ADD
               </motion.button>

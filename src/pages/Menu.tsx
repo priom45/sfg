@@ -106,13 +106,16 @@ export default function MenuPage() {
     ]);
     const categoryData = catRes.data || [];
     const itemData = itemRes.data || [];
+    const visibleCategoryData = categoryData.filter((category) => (
+      itemData.some((item) => item.category_id === category.id)
+    ));
 
-    if (catRes.data) setCategories(sortCategoriesForMenu(catRes.data));
-    if (itemRes.data) setItems(itemRes.data);
+    if (catRes.data) setCategories(sortCategoriesForMenu(visibleCategoryData));
+    if (itemRes.data) setItems(itemData);
     if (offerRes.error) showToast(offerRes.error.message || 'Failed to load offers', 'error');
     setOffers(offerRes.data || []);
     setCustomizationAvailability(availability);
-    setPopularityContext(await fetchMenuPopularity(itemData, categoryData));
+    setPopularityContext(await fetchMenuPopularity(itemData, visibleCategoryData));
     setLoading(false);
   }, [showToast]);
 
@@ -161,7 +164,7 @@ export default function MenuPage() {
   );
 
   const filteredItems = useMemo(() => {
-    let result = [...items];
+    let result = items.filter((item) => item.is_available !== false);
     if (activeCategory !== 'all') {
       const cat = categories.find((c) => c.slug === activeCategory);
       if (cat) result = result.filter((i) => i.category_id === cat.id);
@@ -199,7 +202,7 @@ export default function MenuPage() {
     [activeCategory, categories],
   );
   const bestSellerItems = useMemo(
-    () => popularityContext.rankedItems.slice(0, 12),
+    () => popularityContext.rankedItems.filter((item) => item.is_available !== false).slice(0, 12),
     [popularityContext.rankedItems],
   );
 

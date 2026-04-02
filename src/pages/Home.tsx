@@ -47,16 +47,19 @@ export default function Home() {
     ]);
     const categoryData = catRes.data || [];
     const itemData = allRes.data || [];
+    const visibleCategoryData = categoryData.filter((category) => (
+      itemData.some((item) => item.category_id === category.id)
+    ));
 
-    if (catRes.data) setCategories(sortCategoriesForMenu(catRes.data));
+    if (catRes.data) setCategories(sortCategoriesForMenu(visibleCategoryData));
     if (allRes.data) setAllItems(allRes.data);
     if (offerRes.error) showToast(offerRes.error.message || 'Failed to load offers', 'error');
     setOffers(offerRes.data || []);
     setCustomizationAvailability(availability);
 
-    const popularity = await fetchMenuPopularity(itemData, categoryData);
+    const popularity = await fetchMenuPopularity(itemData, visibleCategoryData);
     setPopularityContext(popularity);
-    setBestSellers(popularity.rankedItems.slice(0, 12));
+    setBestSellers(popularity.rankedItems.filter((item) => item.is_available !== false).slice(0, 12));
   }, [showToast]);
 
   useEffect(() => { void loadData(); }, [loadData]);
@@ -111,7 +114,7 @@ export default function Home() {
 
     return sortedCategories.map((category) => ({
       category,
-      items: [...allItems.filter((item) => item.category_id === category.id)].sort((left, right) => {
+      items: [...allItems.filter((item) => item.category_id === category.id && item.is_available !== false)].sort((left, right) => {
         const itemScoreDelta = (popularityContext.itemScores[right.id] || 0) - (popularityContext.itemScores[left.id] || 0);
         if (itemScoreDelta !== 0) return itemScoreDelta;
 
