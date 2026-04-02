@@ -234,7 +234,7 @@ export default function OfferCarousel({
             <button
               type="button"
               onClick={() => advance(-1)}
-              className="absolute left-3 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/12 bg-brand-bg/70 text-white backdrop-blur-xl transition-all hover:border-brand-gold/40 hover:text-brand-gold"
+              className="absolute left-3 top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/12 bg-brand-bg/70 text-white backdrop-blur-xl transition-all hover:border-brand-gold/40 hover:text-brand-gold sm:flex"
               aria-label="Show previous offer"
             >
               <ChevronLeft size={18} strokeWidth={2.5} />
@@ -242,7 +242,7 @@ export default function OfferCarousel({
             <button
               type="button"
               onClick={() => advance(1)}
-              className="absolute right-3 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/12 bg-brand-bg/70 text-white backdrop-blur-xl transition-all hover:border-brand-gold/40 hover:text-brand-gold"
+              className="absolute right-3 top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/12 bg-brand-bg/70 text-white backdrop-blur-xl transition-all hover:border-brand-gold/40 hover:text-brand-gold sm:flex"
               aria-label="Show next offer"
             >
               <ChevronRight size={18} strokeWidth={2.5} />

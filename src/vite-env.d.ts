@@ -45,6 +45,8 @@ interface RazorpayOptions {
     enabled?: boolean;
     max_count?: number;
   };
+  callback_url?: string;
+  redirect?: boolean;
   handler?: (response: RazorpaySuccessResponse) => void;
 }
 

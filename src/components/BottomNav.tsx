@@ -1,12 +1,11 @@
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Percent, UtensilsCrossed, Package, User } from 'lucide-react';
+import { Home, UtensilsCrossed, Package, User } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAuth } from '../contexts/AuthContext';
 
 const tabs = [
   { to: '/', icon: Home, label: 'Home' },
   { to: '/menu', icon: UtensilsCrossed, label: 'Menu' },
-  { to: '/offers', icon: Percent, label: 'Offers' },
   { to: '/my-orders', icon: Package, label: 'Orders' },
   { to: '/auth', icon: User, label: 'Profile' },
 ];

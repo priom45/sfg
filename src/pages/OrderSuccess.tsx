@@ -6,7 +6,7 @@ import { clearCheckoutSuccessOrder } from '../lib/checkoutSuccess';
 import { clearPendingOnlineOrder, readPendingOnlineOrder } from '../lib/pendingOnlineOrder';
 import { supabase } from '../lib/supabase';
 import { getPaymentMethodLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment } from '../lib/orderLabels';
-import { RAZORPAY_BRAND_IMAGE, createExistingRazorpayOrder, loadRazorpayScript, reconcileRazorpayPayment, verifyRazorpayPayment } from '../lib/razorpay';
+import { RAZORPAY_BRAND_IMAGE, buildRazorpayCallbackUrl, createExistingRazorpayOrder, loadRazorpayScript, reconcileRazorpayPayment, verifyRazorpayPayment } from '../lib/razorpay';
 import type { Order, MenuItem } from '../types';
 import { useToast } from '../components/Toast';
 import { playOrderSound, playOrderCompleteSound, playPickupReadyAlert } from '../lib/sounds';
@@ -270,6 +270,8 @@ export default function OrderSuccessPage() {
             enabled: true,
             max_count: 2,
           },
+          callback_url: buildRazorpayCallbackUrl(razorpayOrder.appOrderId, `/order-success/${razorpayOrder.appOrderId}`),
+          redirect: true,
           modal: {
             confirm_close: true,
             ondismiss: () => {

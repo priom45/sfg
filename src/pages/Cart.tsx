@@ -26,7 +26,7 @@ import { fetchCustomizationAvailability, itemHasAssignedCustomizations, type Cus
 import { createCounterOrder } from '../lib/counterOrder';
 import type { MenuItem, PaymentMethod, Offer, PickupOption, SelectedCustomization } from '../types';
 import { useToast } from '../components/Toast';
-import { RAZORPAY_BRAND_IMAGE, cancelRazorpayPayment, createRazorpayOrder, loadRazorpayScript, verifyRazorpayPayment } from '../lib/razorpay';
+import { RAZORPAY_BRAND_IMAGE, buildRazorpayCallbackUrl, cancelRazorpayPayment, createRazorpayOrder, loadRazorpayScript, verifyRazorpayPayment } from '../lib/razorpay';
 import { playOrderSound } from '../lib/sounds';
 import CustomizationModal from '../components/CustomizationModal';
 
@@ -410,6 +410,8 @@ export default function CartPage() {
             enabled: true,
             max_count: 2,
           },
+          callback_url: buildRazorpayCallbackUrl(razorpayOrder.appOrderId),
+          redirect: true,
           modal: {
             confirm_close: true,
             ondismiss: () => {

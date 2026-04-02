@@ -100,6 +100,29 @@ export const RAZORPAY_BRAND_IMAGE =
     ? '/razorpay-logo-badge.svg'
     : new URL('/razorpay-logo-badge.svg', window.location.origin).toString();
 
+function getSupabaseFunctionsBaseUrl() {
+  return new URL('/functions/v1/', import.meta.env.VITE_SUPABASE_URL as string);
+}
+
+function toAbsoluteReturnUrl(returnPathOrUrl: string) {
+  if (/^https?:\/\//i.test(returnPathOrUrl)) {
+    return returnPathOrUrl;
+  }
+
+  if (typeof window === 'undefined') {
+    throw new Error('Window is not available');
+  }
+
+  return new URL(returnPathOrUrl, window.location.origin).toString();
+}
+
+export function buildRazorpayCallbackUrl(appOrderId: string, returnPathOrUrl = `/order-success/${appOrderId}`) {
+  const callbackUrl = new URL('razorpay-callback', getSupabaseFunctionsBaseUrl());
+  callbackUrl.searchParams.set('app_order_id', appOrderId);
+  callbackUrl.searchParams.set('return_url', toAbsoluteReturnUrl(returnPathOrUrl));
+  return callbackUrl.toString();
+}
+
 async function refreshCustomerSession(errorMessage = 'Please sign in again to continue.') {
   const { data: refreshedData, error: refreshError } = await customerSupabase.auth.refreshSession();
   if (refreshError || !refreshedData.session) {
