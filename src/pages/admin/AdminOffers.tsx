@@ -11,7 +11,16 @@ import {
   isOfferCartEligible,
 } from '../../lib/offers';
 import { supabase } from '../../lib/supabase';
-import type { Category, MenuItem, Offer, OfferCtaTargetType, OfferDiscountType, OfferMode, OfferTriggerType } from '../../types';
+import type {
+  Category,
+  MenuItem,
+  Offer,
+  OfferCtaTargetType,
+  OfferDiscountType,
+  OfferMode,
+  OfferRewardItemSource,
+  OfferTriggerType,
+} from '../../types';
 
 type OfferMenuItemOption = Pick<MenuItem, 'id' | 'name' | 'price' | 'is_available'>;
 type OfferCategoryOption = Pick<Category, 'id' | 'name'>;
@@ -40,6 +49,7 @@ interface OfferForm {
   qualifying_category_id: string;
   qualifying_menu_item_id: string;
   reward_menu_item_id: string;
+  reward_item_source: OfferRewardItemSource;
   reward_item_quantity: string;
   valid_from: string;
   valid_until: string;
@@ -75,6 +85,7 @@ ALTER TABLE offers
   ADD COLUMN IF NOT EXISTS qualifying_category_id uuid REFERENCES categories(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS qualifying_menu_item_id uuid REFERENCES menu_items(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS reward_menu_item_id uuid REFERENCES menu_items(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS reward_item_source text NOT NULL DEFAULT 'specific_item',
   ADD COLUMN IF NOT EXISTS reward_item_quantity integer NOT NULL DEFAULT 1;
 
 ALTER TABLE offers
@@ -85,12 +96,20 @@ ALTER TABLE offers
   CHECK (reward_item_quantity >= 1);
 
 ALTER TABLE offers
+  DROP CONSTRAINT IF EXISTS offers_reward_item_source_check;
+
+ALTER TABLE offers
+  ADD CONSTRAINT offers_reward_item_source_check
+  CHECK (reward_item_source IN ('specific_item', 'qualifying_item'));
+
+ALTER TABLE offers
   DROP CONSTRAINT IF EXISTS offers_free_item_reward_required_check;
 
 ALTER TABLE offers
   ADD CONSTRAINT offers_free_item_reward_required_check
   CHECK (
     discount_type <> 'free_item'
+    OR reward_item_source = 'qualifying_item'
     OR reward_menu_item_id IS NOT NULL
   );
 
@@ -104,6 +123,17 @@ ALTER TABLE offers
     OR trigger_type <> 'item_quantity'
     OR qualifying_category_id IS NOT NULL
     OR qualifying_menu_item_id IS NOT NULL
+  );
+
+ALTER TABLE offers
+  DROP CONSTRAINT IF EXISTS offers_free_item_matching_source_requires_quantity_trigger_check;
+
+ALTER TABLE offers
+  ADD CONSTRAINT offers_free_item_matching_source_requires_quantity_trigger_check
+  CHECK (
+    discount_type <> 'free_item'
+    OR reward_item_source <> 'qualifying_item'
+    OR trigger_type = 'item_quantity'
   );`;
 
 const CTA_TARGET_SCHEMA_SQL = `ALTER TABLE offers
@@ -250,6 +280,7 @@ function buildEmptyOffer(): OfferForm {
     qualifying_category_id: '',
     qualifying_menu_item_id: '',
     reward_menu_item_id: '',
+    reward_item_source: 'specific_item',
     reward_item_quantity: '1',
     valid_from: toDateTimeLocalValue(validFrom.toISOString()),
     valid_until: toDateTimeLocalValue(validUntil.toISOString()),
@@ -285,6 +316,7 @@ function mapOfferToForm(offer: Offer): OfferForm {
     qualifying_category_id: offer.qualifying_category_id || '',
     qualifying_menu_item_id: offer.qualifying_menu_item_id || '',
     reward_menu_item_id: offer.reward_menu_item_id || '',
+    reward_item_source: offer.reward_item_source === 'qualifying_item' ? 'qualifying_item' : 'specific_item',
     reward_item_quantity: String(offer.reward_item_quantity || 1),
     valid_from: toDateTimeLocalValue(offer.valid_from),
     valid_until: toDateTimeLocalValue(offer.valid_until),
@@ -320,7 +352,12 @@ function buildPreviewOffer(offer: OfferForm): Offer {
       : null,
     qualifying_category_id: isCartEligible ? offer.qualifying_category_id.trim() || null : null,
     qualifying_menu_item_id: isCartEligible ? offer.qualifying_menu_item_id.trim() || null : null,
-    reward_menu_item_id: isCartEligible ? offer.reward_menu_item_id.trim() || null : null,
+    reward_menu_item_id: isCartEligible && offer.reward_item_source !== 'qualifying_item'
+      ? offer.reward_menu_item_id.trim() || null
+      : null,
+    reward_item_source: isCartEligible && offer.discount_type === 'free_item'
+      ? offer.reward_item_source
+      : 'specific_item',
     reward_item_quantity: isCartEligible ? Math.max(1, parseInt(offer.reward_item_quantity, 10) || 1) : 1,
     valid_from: toIsoDateTime(offer.valid_from),
     valid_until: toIsoDateTime(offer.valid_until),
@@ -346,8 +383,8 @@ function isMissingOfferFreeItemSchema(error: { message?: string } | null) {
   return Boolean(
     error?.message
     && (
-      /Could not find the '(qualifying_category_id|qualifying_menu_item_id|reward_menu_item_id|reward_item_quantity)' column of 'offers'/.test(error.message)
-      || /offers_discount_type_check|offers_reward_item_quantity_check|offers_free_item_reward_required_check|offers_free_item_scope_required_check/.test(error.message)
+      /Could not find the '(qualifying_category_id|qualifying_menu_item_id|reward_menu_item_id|reward_item_source|reward_item_quantity)' column of 'offers'/.test(error.message)
+      || /offers_discount_type_check|offers_reward_item_quantity_check|offers_reward_item_source_check|offers_free_item_reward_required_check|offers_free_item_scope_required_check|offers_free_item_matching_source_requires_quantity_trigger_check/.test(error.message)
     ),
   );
 }
@@ -519,7 +556,7 @@ export default function AdminOffers() {
           .every((column) => Object.prototype.hasOwnProperty.call(sampleOffer, column)),
       );
       setFreeItemSchemaAvailable(
-        ['qualifying_category_id', 'qualifying_menu_item_id', 'reward_menu_item_id', 'reward_item_quantity']
+        ['qualifying_category_id', 'qualifying_menu_item_id', 'reward_menu_item_id', 'reward_item_source', 'reward_item_quantity']
           .every((column) => Object.prototype.hasOwnProperty.call(sampleOffer, column)),
       );
       setCtaTargetSchemaAvailable(
@@ -563,9 +600,20 @@ export default function AdminOffers() {
     if (
       editing.is_cart_eligible
       && editing.discount_type === 'free_item'
+      && editing.reward_item_source === 'specific_item'
       && !editing.reward_menu_item_id
     ) {
       showToast('Select the free item that should be added automatically', 'error');
+      return;
+    }
+
+    if (
+      editing.is_cart_eligible
+      && editing.discount_type === 'free_item'
+      && editing.reward_item_source === 'qualifying_item'
+      && editing.trigger_type !== 'item_quantity'
+    ) {
+      showToast('Same-item rewards require the item quantity trigger', 'error');
       return;
     }
 
@@ -666,9 +714,12 @@ export default function AdminOffers() {
       qualifying_menu_item_id: editing.is_cart_eligible && resolvedTriggerType === 'item_quantity'
         ? editing.qualifying_menu_item_id || null
         : null,
-      reward_menu_item_id: editing.is_cart_eligible && editing.discount_type === 'free_item'
+      reward_menu_item_id: editing.is_cart_eligible && editing.discount_type === 'free_item' && editing.reward_item_source === 'specific_item'
         ? editing.reward_menu_item_id || null
         : null,
+      reward_item_source: editing.is_cart_eligible && editing.discount_type === 'free_item'
+        ? editing.reward_item_source
+        : 'specific_item',
       reward_item_quantity: editing.is_cart_eligible && editing.discount_type === 'free_item'
         ? Math.max(1, parseInt(editing.reward_item_quantity, 10) || 1)
         : 1,
@@ -720,6 +771,7 @@ export default function AdminOffers() {
         || editing.qualifying_category_id
         || editing.qualifying_menu_item_id
         || editing.reward_menu_item_id
+        || editing.reward_item_source !== 'specific_item'
         || parseInt(editing.reward_item_quantity, 10) > 1
       )
     );
@@ -749,7 +801,7 @@ export default function AdminOffers() {
 
     if (requiresFreeItemSchema && freeItemSchemaAvailable === false) {
       showToast(
-        'Run Supabase migration 20260331120000_add_buy_x_get_y_free_item_offers.sql before using free-item promotions.',
+        'Run Supabase free-item migrations through 20260408120000_add_offer_reward_item_source.sql before using free-item promotions.',
         'error',
       );
       return;
@@ -780,7 +832,7 @@ export default function AdminOffers() {
     if (error && isMissingOfferFreeItemSchema(error)) {
       setFreeItemSchemaAvailable(false);
       showToast(
-        'Run Supabase migration 20260331120000_add_buy_x_get_y_free_item_offers.sql before using free-item promotions.',
+        'Run Supabase free-item migrations through 20260408120000_add_offer_reward_item_source.sql before using free-item promotions.',
         'error',
       );
       return;
@@ -1343,17 +1395,41 @@ export default function AdminOffers() {
                 {editing.discount_type === 'free_item' && (
                   <>
                     <select
-                      value={editing.reward_menu_item_id}
-                      onChange={(e) => setEditing({ ...editing, reward_menu_item_id: e.target.value })}
+                      value={editing.reward_item_source}
+                      onChange={(e) => setEditing((current) => {
+                        if (!current) return current;
+                        const nextSource = e.target.value as OfferRewardItemSource;
+                        return {
+                          ...current,
+                          reward_item_source: nextSource,
+                          reward_menu_item_id: nextSource === 'specific_item' ? current.reward_menu_item_id : '',
+                          trigger_type: nextSource === 'qualifying_item' ? 'item_quantity' : current.trigger_type,
+                        };
+                      })}
                       className="input-field"
                     >
-                      <option value="">Free Item</option>
-                      {menuItems.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name}{item.is_available ? '' : ' (Unavailable)'} - ₹{item.price}
-                        </option>
-                      ))}
+                      <option value="specific_item">Free Reward: Specific Item</option>
+                      <option value="qualifying_item">Free Reward: Same As Bought Item</option>
                     </select>
+
+                    {editing.reward_item_source === 'specific_item' ? (
+                      <select
+                        value={editing.reward_menu_item_id}
+                        onChange={(e) => setEditing({ ...editing, reward_menu_item_id: e.target.value })}
+                        className="input-field"
+                      >
+                        <option value="">Free Item</option>
+                        {menuItems.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name}{item.is_available ? '' : ' (Unavailable)'} - ₹{item.price}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+                        Customers will get the same item they bought for free automatically. Example: buy Vanilla Milkshake, get Vanilla Milkshake free.
+                      </div>
+                    )}
 
                     <input
                       placeholder="Free Quantity"
@@ -1420,7 +1496,7 @@ export default function AdminOffers() {
               Button Action lets the banner CTA open the full menu, a specific category, or a specific product.
             </p>
             <p className="mt-2 text-xs text-brand-text-dim">
-              For buy-X-get-Y offers: choose `Trigger: Item Quantity`, pick `Free Item`, then choose either a specific item or a whole category to buy from before selecting the free item.
+              For buy-X-get-Y offers: choose `Trigger: Item Quantity`, pick `Free Item`, then choose either a fixed free item or `Same As Bought Item` for offers like buy 1 milkshake get the same milkshake free.
             </p>
             <p className="mt-2 text-xs text-brand-text-dim">
               You can also set `Minimum Order Value` together with `Trigger: Item Quantity` if the free item should unlock only after both conditions are met.
@@ -1432,7 +1508,7 @@ export default function AdminOffers() {
             )}
             {freeItemSchemaAvailable === false && (
               <p className="mt-2 text-xs text-amber-300">
-                Free item promotions need migration `20260331120000_add_buy_x_get_y_free_item_offers.sql` before they can be saved.
+                Free item promotions need the latest free-item migrations, including `20260408120000_add_offer_reward_item_source.sql`, before they can be saved.
               </p>
             )}
             {ctaTargetSchemaAvailable === false && (

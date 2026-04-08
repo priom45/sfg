@@ -1,4 +1,13 @@
-import type { CartItem, MenuItem, Offer, OfferCtaTargetType, OfferDiscountType, OfferMode, OfferTriggerType } from '../types';
+import type {
+  CartItem,
+  MenuItem,
+  Offer,
+  OfferCtaTargetType,
+  OfferDiscountType,
+  OfferMode,
+  OfferRewardItemSource,
+  OfferTriggerType,
+} from '../types';
 
 export interface OfferPricingContext {
   subtotal: number;
@@ -92,26 +101,39 @@ function getOfferRewardItemId(offer: Offer) {
   return normalizeOptionalText(offer.reward_menu_item_id);
 }
 
+function getOfferRewardItemSource(offer: Offer): OfferRewardItemSource {
+  return offer.reward_item_source === 'qualifying_item' ? 'qualifying_item' : 'specific_item';
+}
+
+function getMatchingOfferItems(offer: Offer, context: OfferPricingContext) {
+  const qualifyingItemId = getOfferQualifyingItemId(offer);
+  if (qualifyingItemId) {
+    return (context.items || []).filter((item) => item.menu_item.id === qualifyingItemId);
+  }
+
+  const qualifyingCategoryId = getOfferQualifyingCategoryId(offer);
+  if (qualifyingCategoryId) {
+    return (context.items || []).filter((item) => item.menu_item.category_id === qualifyingCategoryId);
+  }
+
+  return [...(context.items || [])];
+}
+
 function getOfferItemCount(offer: Offer, context: OfferPricingContext) {
   if (getOfferTriggerType(offer) !== 'item_quantity') {
     return context.itemCount;
   }
 
-  const qualifyingItemId = getOfferQualifyingItemId(offer);
-  if (qualifyingItemId) {
-    return (context.items || []).reduce((sum, item) => (
-      item.menu_item.id === qualifyingItemId ? sum + item.quantity : sum
-    ), 0);
+  if (getOfferRewardItemSource(offer) === 'qualifying_item') {
+    const quantitiesByMenuItem = new Map<string, number>();
+    for (const item of getMatchingOfferItems(offer, context)) {
+      quantitiesByMenuItem.set(item.menu_item.id, (quantitiesByMenuItem.get(item.menu_item.id) || 0) + item.quantity);
+    }
+
+    return Array.from(quantitiesByMenuItem.values()).reduce((max, quantity) => Math.max(max, quantity), 0);
   }
 
-  const qualifyingCategoryId = getOfferQualifyingCategoryId(offer);
-  if (qualifyingCategoryId) {
-    return (context.items || []).reduce((sum, item) => (
-      item.menu_item.category_id === qualifyingCategoryId ? sum + item.quantity : sum
-    ), 0);
-  }
-
-  return (context.items || []).reduce((sum, item) => (
+  return getMatchingOfferItems(offer, context).reduce((sum, item) => (
     sum + item.quantity
   ), 0);
 }
@@ -220,7 +242,9 @@ export function getOfferRewardLabel(offer: Offer) {
       const rewardQuantity = getRewardItemQuantity(offer);
       if (getOfferTriggerType(offer) === 'item_quantity') {
         const requiredQuantity = getRequiredItemQuantity(offer) || 1;
-        return `BUY ${requiredQuantity} GET ${rewardQuantity}`;
+        return getOfferRewardItemSource(offer) === 'qualifying_item'
+          ? `BUY ${requiredQuantity} GET ${rewardQuantity} SAME ITEM`
+          : `BUY ${requiredQuantity} GET ${rewardQuantity}`;
       }
       return rewardQuantity === 1 ? 'FREE ITEM' : `${rewardQuantity} FREE ITEMS`;
     }
@@ -248,7 +272,9 @@ export function getOfferRuleSummary(offer: Offer) {
     const requiredQuantity = getRequiredItemQuantity(offer) || 1;
     if (getOfferDiscountType(offer) === 'free_item') {
       const rewardQuantity = getRewardItemQuantity(offer);
-      return `Buy ${requiredQuantity} item${requiredQuantity === 1 ? '' : 's'} and get ${rewardQuantity} free${minimumOrderSuffix}`;
+      return getOfferRewardItemSource(offer) === 'qualifying_item'
+        ? `Buy ${requiredQuantity} item${requiredQuantity === 1 ? '' : 's'} and get ${rewardQuantity} of the same item free${minimumOrderSuffix}`
+        : `Buy ${requiredQuantity} item${requiredQuantity === 1 ? '' : 's'} and get ${rewardQuantity} free${minimumOrderSuffix}`;
     }
     return getOfferDiscountType(offer) === 'free_addons'
       ? `Buy ${requiredQuantity} items and unlock free add-ons${minimumOrderSuffix}`
@@ -304,6 +330,53 @@ export function getOfferEligibilityError(offer: Offer, context: OfferPricingCont
 export function getOfferRewardItems(offer: Offer, context: OfferPricingContext): OfferRewardItem[] {
   if (getOfferDiscountType(offer) !== 'free_item' || getOfferEligibilityError(offer, context)) {
     return [];
+  }
+
+  if (getOfferRewardItemSource(offer) === 'qualifying_item') {
+    if (getOfferTriggerType(offer) !== 'item_quantity') {
+      return [];
+    }
+
+    const requiredQuantity = getRequiredItemQuantity(offer) || 1;
+    const rewardQuantity = getRewardItemQuantity(offer);
+    const qualifyingItemsByMenuItem = new Map<string, { item: Pick<MenuItem, 'id' | 'name' | 'image_url' | 'price'>; quantity: number }>();
+
+    for (const cartItem of getMatchingOfferItems(offer, context)) {
+      const rewardMenuItem = context.menuItemsById?.[cartItem.menu_item.id];
+      if (!rewardMenuItem) {
+        continue;
+      }
+
+      const existingEntry = qualifyingItemsByMenuItem.get(rewardMenuItem.id);
+      if (existingEntry) {
+        existingEntry.quantity += cartItem.quantity;
+        continue;
+      }
+
+      qualifyingItemsByMenuItem.set(rewardMenuItem.id, {
+        item: rewardMenuItem,
+        quantity: cartItem.quantity,
+      });
+    }
+
+    return Array.from(qualifyingItemsByMenuItem.values())
+      .map(({ item, quantity }) => {
+        const eligibleCycles = Math.floor(quantity / requiredQuantity);
+        if (eligibleCycles <= 0) {
+          return null;
+        }
+
+        return {
+          menu_item_id: item.id,
+          item_name: item.name,
+          image_url: item.image_url,
+          quantity: rewardQuantity * eligibleCycles,
+          unit_price: normalizeNumber(item.price),
+          offer_id: offer.id,
+          offer_title: offer.title,
+        };
+      })
+      .filter((item): item is OfferRewardItem => item !== null);
   }
 
   const rewardItemId = getOfferRewardItemId(offer);

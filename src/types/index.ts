@@ -87,6 +87,7 @@ export type OfferMode = 'coupon' | 'automatic';
 export type OfferTriggerType = 'min_order' | 'item_quantity';
 export type OfferDiscountType = 'percentage' | 'flat' | 'free_addons' | 'free_item';
 export type OfferCtaTargetType = 'menu' | 'category' | 'item';
+export type OfferRewardItemSource = 'specific_item' | 'qualifying_item';
 
 export interface Offer {
   id: string;
@@ -110,6 +111,7 @@ export interface Offer {
   qualifying_category_id?: string | null;
   qualifying_menu_item_id?: string | null;
   reward_menu_item_id?: string | null;
+  reward_item_source?: OfferRewardItemSource | null;
   reward_item_quantity?: number | null;
   valid_from: string;
   valid_until: string;
