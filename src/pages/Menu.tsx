@@ -162,6 +162,13 @@ export default function MenuPage() {
     ])),
     [suggestedCategoryContext.categories],
   );
+  const rankedItemPriority = useMemo(
+    () => new Map(popularityContext.rankedItems.map((item, index) => [
+      item.id,
+      popularityContext.rankedItems.length - index,
+    ])),
+    [popularityContext.rankedItems],
+  );
 
   const filteredItems = useMemo(() => {
     let result = items.filter((item) => item.is_available !== false);
@@ -184,6 +191,9 @@ export default function MenuPage() {
           const fallbackItemDelta = (popularityContext.fallbackItemScores[b.id] || 0) - (popularityContext.fallbackItemScores[a.id] || 0);
           if (fallbackItemDelta !== 0) return fallbackItemDelta;
 
+          const rankedItemDelta = (rankedItemPriority.get(b.id) || 0) - (rankedItemPriority.get(a.id) || 0);
+          if (rankedItemDelta !== 0) return rankedItemDelta;
+
           if (activeCategory === 'all' && !search.trim()) {
             const categoryBoost = (suggestedCategoryPriority.get(b.category_id) || 0) - (suggestedCategoryPriority.get(a.category_id) || 0);
             if (categoryBoost !== 0) return categoryBoost;
@@ -196,7 +206,7 @@ export default function MenuPage() {
         });
     }
     return result;
-  }, [items, categories, activeCategory, popularityContext.fallbackItemScores, popularityContext.itemScores, search, sortBy, suggestedCategoryPriority]);
+  }, [items, categories, activeCategory, popularityContext.fallbackItemScores, popularityContext.itemScores, rankedItemPriority, search, sortBy, suggestedCategoryPriority]);
   const currentCategory = useMemo(
     () => (activeCategory === 'all' ? null : categories.find((category) => category.slug === activeCategory) || null),
     [activeCategory, categories],
@@ -444,7 +454,8 @@ export default function MenuPage() {
 
       {activeCategory === 'all' && !search.trim() && bestSellerItems.length > 0 && (
         <MenuBestSellerRail
-          title="Best Sellers"
+          title={popularityContext.title}
+          subtitle={popularityContext.subtitle}
           items={bestSellerItems}
           onImageClick={handleImageClick}
           onAdd={handleAdd}
@@ -595,12 +606,14 @@ function CategoryPill({ label, active, onClick }: { label: string; slug: string;
 
 function MenuBestSellerRail({
   title,
+  subtitle,
   items,
   onImageClick,
   onAdd,
   onSeeAll,
 }: {
   title: string;
+  subtitle?: string;
   items: MenuItem[];
   onImageClick: (item: MenuItem) => void;
   onAdd: (item: MenuItem) => void;
@@ -635,9 +648,14 @@ function MenuBestSellerRail({
   return (
     <section className="pt-4 pb-2">
       <div className="px-4 flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <Flame size={18} className="text-orange-400" strokeWidth={2.5} />
-          <h2 className="text-[18px] font-bold text-white">{title}</h2>
+        <div>
+          <div className="flex items-center gap-2">
+            <Flame size={18} className="text-orange-400" strokeWidth={2.5} />
+            <h2 className="text-[18px] font-bold text-white">{title}</h2>
+          </div>
+          {subtitle && (
+            <p className="mt-0.5 text-[12px] font-medium text-brand-text-dim">{subtitle}</p>
+          )}
         </div>
         <button
           type="button"

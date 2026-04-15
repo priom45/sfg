@@ -4,12 +4,18 @@ import {
   FunctionsRelayError,
 } from '@supabase/supabase-js';
 import { supabase } from './supabase';
+import type { CounterPaymentMethod } from '../types';
 
 interface MarkOrderPaidResponse {
   success: boolean;
   appOrderId?: string;
   receiptEmailSent?: boolean;
   error?: string;
+}
+
+interface MarkOrderPaidOptions {
+  counterPaymentMethod?: CounterPaymentMethod;
+  cashReceivedAmount?: number;
 }
 
 interface MarkedOrderPaid {
@@ -84,13 +90,17 @@ async function toMarkPaidFunctionError(error: unknown) {
   return error instanceof Error ? error : new Error('Failed to update payment');
 }
 
-export async function markOrderPaid(orderId: string) {
+export async function markOrderPaid(orderId: string, options: MarkOrderPaidOptions = {}) {
   let session = await ensureFreshPaidStatusSession();
 
   const { data, error } = await supabase.functions.invoke<MarkOrderPaidResponse>(
     'mark-order-paid',
     {
-      body: { orderId },
+      body: {
+        orderId,
+        counterPaymentMethod: options.counterPaymentMethod,
+        cashReceivedAmount: options.cashReceivedAmount,
+      },
       headers: {
         Authorization: `Bearer ${session.access_token}`,
       },
@@ -102,7 +112,11 @@ export async function markOrderPaid(orderId: string) {
     const retry = await supabase.functions.invoke<MarkOrderPaidResponse>(
       'mark-order-paid',
       {
-        body: { orderId },
+        body: {
+          orderId,
+          counterPaymentMethod: options.counterPaymentMethod,
+          cashReceivedAmount: options.cashReceivedAmount,
+        },
         headers: {
           Authorization: `Bearer ${session.access_token}`,
         },

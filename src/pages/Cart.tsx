@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Minus, Plus, Trash2, ShoppingBag, ArrowLeft, Tag, User, Pencil, Store, Wallet, CreditCard } from 'lucide-react';
+import { Minus, Plus, Trash2, ShoppingBag, ArrowLeft, Tag, User, Pencil, Store, Wallet, CreditCard, Gift } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useCart } from '../contexts/CartContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -24,7 +24,9 @@ import { getServiceModeLabel } from '../lib/orderLabels';
 import { menuItemSupportsCustomizations } from '../lib/menuItems';
 import { fetchCustomizationAvailability, itemHasAssignedCustomizations, type CustomizationAvailability } from '../lib/customizations';
 import { createCounterOrder } from '../lib/counterOrder';
-import type { MenuItem, PaymentMethod, Offer, PickupOption, SelectedCustomization } from '../types';
+import { suggestCartAddOns } from '../lib/cartSuggestions';
+import { calculateReviewRewardDiscount } from '../lib/itemReviews';
+import type { MenuItem, PaymentMethod, Offer, PickupOption, ReviewRewardCoupon, SelectedCustomization } from '../types';
 import { useToast } from '../components/Toast';
 import { RAZORPAY_BRAND_IMAGE, buildRazorpayCallbackUrl, cancelRazorpayPayment, createRazorpayOrder, loadRazorpayScript, verifyRazorpayPayment } from '../lib/razorpay';
 import { playOrderSound } from '../lib/sounds';
@@ -32,11 +34,135 @@ import CustomizationModal from '../components/CustomizationModal';
 
 const SESSION_KEYWORDS = ['session expired', 'sign in again', 'please sign in'];
 const TAKEAWAY_CHARGE = 10;
+const AI_SUGGESTION_DEBOUNCE_MS = 350;
+const WATER_ITEM_KEYWORDS = ['water bottle', 'water bottles', 'mineral water', 'bottled water', 'bisleri', 'aquafina', 'kinley'];
+const WATER_CATEGORY_KEYWORDS = ['water bottle', 'water bottles', 'mineral water', 'bottled water'];
+const COOL_DRINK_ITEM_KEYWORDS = [
+  'cool drink',
+  'cool drinks',
+  'cold drink',
+  'cold drinks',
+  'soft drink',
+  'soft drinks',
+  'cold coffee',
+  'iced tea',
+  'ice tea',
+  'mojito',
+  'juice',
+  'soda',
+  'cola',
+  'coke',
+  'sprite',
+  'fanta',
+  'thums up',
+  'limca',
+  'maaza',
+  'milkshake',
+  'thick shake',
+  'shake',
+];
+const COOL_DRINK_CATEGORY_KEYWORDS = [
+  'cool drink',
+  'cool drinks',
+  'cold drink',
+  'cold drinks',
+  'soft drink',
+  'soft drinks',
+  'beverage',
+  'beverages',
+  'drinks',
+  'milkshake',
+  'milkshakes',
+  'thick shake',
+  'thick shakes',
+  'shake',
+  'shakes',
+  'juice',
+  'juices',
+  'soda',
+];
+const SNACK_TRIGGER_ITEM_KEYWORDS = [
+  'fries',
+  'french fries',
+  'peri peri',
+  'momos',
+  'momo',
+  'nuggets',
+  'popcorn chicken',
+  'chicken popcorn',
+  'hot dog',
+  'burger',
+  'sandwich',
+  'roll',
+  'wrap',
+  'chaat',
+  'chat',
+  'snack',
+];
+const SNACK_TRIGGER_CATEGORY_KEYWORDS = [
+  'fries',
+  'momos',
+  'momo',
+  'snacks',
+  'snack',
+  'chicken snacks',
+  'chicken momos',
+  'chaat',
+  'chat',
+  'hot dog',
+  'burger',
+  'sandwich',
+  'roll',
+  'wrap',
+  'savory',
+];
 
-type OfferMenuCatalogItem = Pick<MenuItem, 'id' | 'name' | 'image_url' | 'price' | 'category_id'> & { is_available: boolean };
+type OfferMenuCatalogItem = MenuItem;
+type RefreshmentSuggestion = {
+  menuItem: OfferMenuCatalogItem;
+  reason: string | null;
+};
 
 function getPromoRewardSummary(items: OfferRewardItem[]) {
   return items.map((item) => `${item.quantity}x ${item.item_name}`).join(', ');
+}
+
+function normalizeCatalogText(value: string | null | undefined) {
+  return (value || '').trim().toLowerCase();
+}
+
+function matchesKeyword(text: string, keywords: string[]) {
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
+function isWaterBottleLike(item: Pick<MenuItem, 'name'>, categoryName?: string) {
+  const itemText = normalizeCatalogText(item.name);
+  const categoryText = normalizeCatalogText(categoryName);
+  return matchesKeyword(itemText, WATER_ITEM_KEYWORDS) || matchesKeyword(categoryText, WATER_CATEGORY_KEYWORDS);
+}
+
+function isCoolDrinkLike(item: Pick<MenuItem, 'name'>, categoryName?: string) {
+  const itemText = normalizeCatalogText(item.name);
+  const categoryText = normalizeCatalogText(categoryName);
+  return matchesKeyword(itemText, COOL_DRINK_ITEM_KEYWORDS) || matchesKeyword(categoryText, COOL_DRINK_CATEGORY_KEYWORDS);
+}
+
+function isSnackSuggestionTrigger(item: Pick<MenuItem, 'name'>, categoryName?: string) {
+  const itemText = normalizeCatalogText(item.name);
+  const categoryText = normalizeCatalogText(categoryName);
+  return matchesKeyword(itemText, SNACK_TRIGGER_ITEM_KEYWORDS) || matchesKeyword(categoryText, SNACK_TRIGGER_CATEGORY_KEYWORDS);
+}
+
+function getRefreshmentSuggestionLabel(item: Pick<MenuItem, 'name'>, categoryName?: string) {
+  if (isWaterBottleLike(item, categoryName)) {
+    return 'Water bottle add-on';
+  }
+
+  if (isCoolDrinkLike(item, categoryName)) {
+    return 'Cool drink pick';
+  }
+
+  return categoryName || 'Suggested add-on';
 }
 
 export default function CartPage() {
@@ -54,6 +180,8 @@ export default function CartPage() {
   const [couponCode, setCouponCode] = useState('');
   const [appliedOffer, setAppliedOffer] = useState<Offer | null>(null);
   const [selectedAutomaticOfferId, setSelectedAutomaticOfferId] = useState<string | null>(null);
+  const [reviewRewardCoupons, setReviewRewardCoupons] = useState<ReviewRewardCoupon[]>([]);
+  const [selectedReviewRewardCouponId, setSelectedReviewRewardCouponId] = useState<string | null>(null);
   const [couponError, setCouponError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [editingItem, setEditingItem] = useState<{
@@ -62,6 +190,12 @@ export default function CartPage() {
     quantity: number;
     customizations: SelectedCustomization[];
   } | null>(null);
+  const [pendingSuggestedItem, setPendingSuggestedItem] = useState<{
+    cartItemId: string;
+    menuItem: MenuItem;
+    quantity: number;
+  } | null>(null);
+  const [aiRefreshmentSuggestions, setAiRefreshmentSuggestions] = useState<RefreshmentSuggestion[] | null>(null);
   const [offerMenuItemsById, setOfferMenuItemsById] = useState<Record<string, OfferMenuCatalogItem>>({});
   const [offerCategoryNamesById, setOfferCategoryNamesById] = useState<Record<string, string>>({});
   const [menuCatalogLoaded, setMenuCatalogLoaded] = useState(false);
@@ -76,6 +210,41 @@ export default function CartPage() {
       if (profile.phone && !phone) setPhone(profile.phone);
     }
   }, [profile, name, phone]);
+
+  useEffect(() => {
+    if (!user) {
+      setReviewRewardCoupons([]);
+      setSelectedReviewRewardCouponId(null);
+      return;
+    }
+
+    let isMounted = true;
+
+    void (async () => {
+      const { data, error } = await customerSupabase
+        .from('review_reward_coupons')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('is_redeemed', false)
+        .order('created_at', { ascending: false });
+
+      if (!isMounted) {
+        return;
+      }
+
+      if (error) {
+        console.error('Failed to load review reward coupons', error);
+        setReviewRewardCoupons([]);
+        return;
+      }
+
+      setReviewRewardCoupons(data || []);
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user]);
 
   useEffect(() => {
     if (!activeCheckoutOrderId) return;
@@ -105,7 +274,7 @@ export default function CartPage() {
         .order('created_at', { ascending: false }),
       customerSupabase
         .from('menu_items')
-        .select('id, name, image_url, price, is_available, category_id'),
+        .select('*'),
       customerSupabase
         .from('categories')
         .select('id, name'),
@@ -192,7 +361,13 @@ export default function CartPage() {
     : applicableAutomaticOffers.length === 1
       ? applicableAutomaticOffers[0]
       : null;
+  const selectedReviewRewardCoupon = selectedReviewRewardCouponId
+    ? reviewRewardCoupons.find((coupon) => coupon.id === selectedReviewRewardCouponId) || null
+    : null;
   const automaticDiscount = selectedAutomaticOffer?.discountAmount || 0;
+  const reviewRewardDiscount = selectedReviewRewardCoupon
+    ? calculateReviewRewardDiscount(subtotal, Number(selectedReviewRewardCoupon.discount_percentage || 0))
+    : 0;
   const automaticRewardItems = selectedAutomaticOffer?.freeItems || [];
   const promoRewardItems = [...couponRewardItems, ...automaticRewardItems];
   const checkoutItems = [
@@ -212,7 +387,7 @@ export default function CartPage() {
     })),
   ];
   const featuredAutomaticOffer = selectedAutomaticOffer?.offer || applicableAutomaticOffers[0]?.offer || activeOffers.find((offer) => getOfferMode(offer) === 'automatic') || null;
-  const discount = Math.min(subtotal, couponDiscount + automaticDiscount);
+  const discount = Math.min(subtotal, couponDiscount + automaticDiscount + reviewRewardDiscount);
   const takeawayFee = pickupOption === 'takeaway' ? TAKEAWAY_CHARGE : 0;
   const total = Math.max(0, subtotal - discount) + takeawayFee;
   const isFreeOrder = total <= 0;
@@ -247,6 +422,16 @@ export default function CartPage() {
       setSelectedAutomaticOfferId(null);
     }
   }, [applicableAutomaticOffers, selectedAutomaticOfferId]);
+
+  useEffect(() => {
+    if (!selectedReviewRewardCouponId) {
+      return;
+    }
+
+    if (!reviewRewardCoupons.some((coupon) => coupon.id === selectedReviewRewardCouponId)) {
+      setSelectedReviewRewardCouponId(null);
+    }
+  }, [reviewRewardCoupons, selectedReviewRewardCouponId]);
 
   useEffect(() => {
     if (isFreeOrder || paymentMethod !== 'card') return;
@@ -347,6 +532,8 @@ export default function CartPage() {
       subtotal,
       discount,
       total,
+      reviewRewardCouponId: selectedReviewRewardCoupon?.id,
+      reviewRewardDiscountAmount: reviewRewardDiscount,
       items: checkoutItems,
     });
     storePendingOnlineOrder(razorpayOrder.appOrderId);
@@ -523,6 +710,8 @@ export default function CartPage() {
         discount,
         total,
         paymentMethod,
+        reviewRewardCouponId: selectedReviewRewardCoupon?.id,
+        reviewRewardDiscountAmount: reviewRewardDiscount,
         items: checkoutItems,
       });
 
@@ -556,6 +745,168 @@ export default function CartPage() {
     setEditingItem(null);
     showToast('Item updated!');
   }
+
+  const refreshmentSuggestionState = useMemo(() => {
+    const hasSnackTriggerInCart = items.some((item) => {
+      const categoryName = offerCategoryNamesById[item.menu_item.category_id] || '';
+      return isSnackSuggestionTrigger(item.menu_item, categoryName);
+    });
+
+    if (!hasSnackTriggerInCart) {
+      return {
+        hasSnackTriggerInCart: false,
+        localSuggestions: [] as OfferMenuCatalogItem[],
+        candidateItems: [] as OfferMenuCatalogItem[],
+        cartItemsForAi: [] as Array<{
+          menu_item_id: string;
+          name: string;
+          category_name: string;
+          quantity: number;
+        }>,
+      };
+    }
+
+    const cartItemIds = new Set(items.map((item) => item.menu_item.id));
+    const waterSuggestions: OfferMenuCatalogItem[] = [];
+    const coolDrinkSuggestions: OfferMenuCatalogItem[] = [];
+    let hasWaterBottleInCart = false;
+    let hasCoolDrinkInCart = false;
+
+    for (const menuItem of Object.values(offerMenuItemsById)) {
+      const categoryName = offerCategoryNamesById[menuItem.category_id] || '';
+      const waterLike = isWaterBottleLike(menuItem, categoryName);
+      const coolDrinkLike = isCoolDrinkLike(menuItem, categoryName);
+
+      if (!waterLike && !coolDrinkLike) {
+        continue;
+      }
+
+      if (cartItemIds.has(menuItem.id)) {
+        hasWaterBottleInCart = hasWaterBottleInCart || waterLike;
+        hasCoolDrinkInCart = hasCoolDrinkInCart || coolDrinkLike;
+        continue;
+      }
+
+      if (waterLike) {
+        waterSuggestions.push(menuItem);
+        continue;
+      }
+
+      coolDrinkSuggestions.push(menuItem);
+    }
+
+    waterSuggestions.sort((left, right) => left.price - right.price || left.name.localeCompare(right.name));
+    coolDrinkSuggestions.sort((left, right) => left.price - right.price || left.name.localeCompare(right.name));
+
+    return {
+      hasSnackTriggerInCart: true,
+      localSuggestions: [
+        ...(hasWaterBottleInCart ? [] : waterSuggestions.slice(0, 2)),
+        ...(hasCoolDrinkInCart ? [] : coolDrinkSuggestions.slice(0, 3)),
+      ].slice(0, 4),
+      candidateItems: [
+        ...(hasWaterBottleInCart ? [] : waterSuggestions),
+        ...(hasCoolDrinkInCart ? [] : coolDrinkSuggestions),
+      ],
+      cartItemsForAi: items.map((item) => ({
+        menu_item_id: item.menu_item.id,
+        name: item.menu_item.name,
+        category_name: offerCategoryNamesById[item.menu_item.category_id] || '',
+        quantity: item.quantity,
+      })),
+    };
+  }, [items, offerCategoryNamesById, offerMenuItemsById]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAiRefreshmentSuggestions(null);
+    const timeoutId = window.setTimeout(() => {
+      void loadAiRefreshmentSuggestions();
+    }, AI_SUGGESTION_DEBOUNCE_MS);
+
+    async function loadAiRefreshmentSuggestions() {
+      if (!refreshmentSuggestionState.hasSnackTriggerInCart || refreshmentSuggestionState.candidateItems.length === 0) {
+        setAiRefreshmentSuggestions([]);
+        return;
+      }
+
+      try {
+        const suggestions = await suggestCartAddOns({
+          cartItems: refreshmentSuggestionState.cartItemsForAi,
+          candidateItems: refreshmentSuggestionState.candidateItems.map((item) => ({
+            menu_item_id: item.id,
+            name: item.name,
+            category_name: offerCategoryNamesById[item.category_id] || '',
+            price: item.price,
+          })),
+          limit: 4,
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        const candidateItemsById = refreshmentSuggestionState.candidateItems.reduce<Record<string, OfferMenuCatalogItem>>((acc, item) => {
+          acc[item.id] = item;
+          return acc;
+        }, {});
+
+        const nextSuggestions = suggestions
+          .map((suggestion) => {
+            const menuItem = candidateItemsById[suggestion.menu_item_id];
+            if (!menuItem) {
+              return null;
+            }
+
+            return {
+              menuItem,
+              reason: suggestion.reason?.trim() || null,
+            } satisfies RefreshmentSuggestion;
+          })
+          .filter((suggestion): suggestion is RefreshmentSuggestion => suggestion !== null);
+
+        setAiRefreshmentSuggestions(nextSuggestions);
+      } catch (error) {
+        console.error('Failed to load AI cart suggestions', error);
+        if (!cancelled) {
+          setAiRefreshmentSuggestions(null);
+        }
+      }
+    }
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [offerCategoryNamesById, refreshmentSuggestionState]);
+
+  const refreshmentSuggestions = useMemo(() => {
+    if (aiRefreshmentSuggestions !== null) {
+      return aiRefreshmentSuggestions;
+    }
+
+    return refreshmentSuggestionState.localSuggestions.map((menuItem) => ({
+      menuItem,
+      reason: null,
+    }));
+  }, [aiRefreshmentSuggestions, refreshmentSuggestionState.localSuggestions]);
+
+  const handleSuggestedAdd = useCallback((menuItem: MenuItem) => {
+    if (!menuItem.is_available) {
+      showToast(`${menuItem.name} is currently out of stock`, 'error');
+      return;
+    }
+
+    const supportsCustomizations = itemHasAssignedCustomizations(menuItem, customizationAvailability);
+    const cartItemId = addItem(menuItem, 1, []);
+    showToast(`${menuItem.name} added to cart`);
+
+    if (!supportsCustomizations) {
+      return;
+    }
+
+    setPendingSuggestedItem({ cartItemId, menuItem, quantity: 1 });
+  }, [addItem, customizationAvailability, showToast]);
 
   if (items.length === 0) {
     if (activeCheckoutOrderId) {
@@ -730,6 +1081,56 @@ export default function CartPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {refreshmentSuggestions.length > 0 && (
+            <div className="rounded-2xl border border-brand-gold/20 bg-brand-gold/[0.04] p-4">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.24em] text-brand-gold">Complete Your Order</p>
+                <h2 className="mt-1 text-[16px] font-extrabold tracking-tight text-white">
+                  Add drinks with your snacks
+                </h2>
+                <p className="mt-1 text-[12px] font-medium text-brand-text-dim">
+                  Quick water bottle and cool drink picks before checkout.
+                </p>
+              </div>
+
+              <div className="mt-3 space-y-2.5">
+                {refreshmentSuggestions.map((suggestion) => {
+                  const menuItem = suggestion.menuItem;
+                  const categoryName = offerCategoryNamesById[menuItem.category_id] || '';
+
+                  return (
+                    <div
+                      key={menuItem.id}
+                      className="flex items-center gap-3 rounded-xl border border-brand-border bg-brand-surface p-2.5"
+                    >
+                      <img
+                        src={menuItem.image_url || '/image.png'}
+                        alt={menuItem.name}
+                        className="h-14 w-14 flex-shrink-0 rounded-lg object-cover"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-bold text-white">{menuItem.name}</p>
+                        <p className="mt-0.5 text-[11px] font-medium text-brand-text-dim">
+                          {suggestion.reason || getRefreshmentSuggestionLabel(menuItem, categoryName)}
+                        </p>
+                        <p className="mt-1 text-[13px] font-extrabold text-brand-gold">
+                          {'\u20B9'}{menuItem.price}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleSuggestedAdd(menuItem)}
+                        className="rounded-lg border-2 border-brand-gold px-3 py-2 text-[11px] font-black text-brand-gold transition-colors hover:bg-brand-gold hover:text-brand-bg"
+                      >
+                        ADD
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
@@ -911,6 +1312,60 @@ export default function CartPage() {
               <button onClick={() => { setAppliedOffer(null); setCouponCode(''); }} className="font-semibold hover:underline">Remove</button>
             </div>
           )}
+          {reviewRewardCoupons.length > 0 && (
+            <div className="mt-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-3 text-[12px]">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-emerald-300">
+                  <Gift size={14} />
+                  <span className="font-semibold">Review rewards</span>
+                </div>
+                {selectedReviewRewardCoupon && (
+                  <button
+                    onClick={() => setSelectedReviewRewardCouponId(null)}
+                    className="font-semibold text-brand-text-muted hover:text-white"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <p className="mt-1 text-emerald-200">
+                Use one 10% item-review reward on this order.
+              </p>
+              <div className="mt-3 space-y-2">
+                {reviewRewardCoupons.map((coupon) => {
+                  const isSelected = selectedReviewRewardCouponId === coupon.id;
+                  const rewardDiscountAmount = calculateReviewRewardDiscount(
+                    subtotal,
+                    Number(coupon.discount_percentage || 0),
+                  );
+
+                  return (
+                    <button
+                      key={coupon.id}
+                      onClick={() => setSelectedReviewRewardCouponId(coupon.id)}
+                      className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                        isSelected
+                          ? 'border-emerald-400/40 bg-emerald-500/15'
+                          : 'border-brand-border bg-brand-surface/40 hover:border-emerald-500/30 hover:bg-brand-surface/60'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={`font-semibold ${isSelected ? 'text-emerald-300' : 'text-white'}`}>
+                          {coupon.code}
+                        </span>
+                        <span className={`font-bold ${isSelected ? 'text-emerald-200' : 'text-emerald-300'}`}>
+                          Save {'\u20B9'}{rewardDiscountAmount.toFixed(0)}
+                        </span>
+                      </div>
+                      <p className={`mt-1 ${isSelected ? 'text-emerald-200' : 'text-brand-text-muted'}`}>
+                        10% off from your item review reward
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {featuredAutomaticOffer && (
             <div className="mt-2.5 rounded-lg border border-brand-gold/20 bg-brand-gold/10 px-3 py-3 text-[12px]">
               <div className="flex items-center justify-between gap-2">
@@ -993,6 +1448,12 @@ export default function CartPage() {
                 <span className="tabular-nums">-{'\u20B9'}{automaticDiscount.toFixed(0)}</span>
               </div>
             )}
+            {reviewRewardDiscount > 0 && (
+              <div className="flex justify-between text-emerald-400">
+                <span className="text-[13px]">Review reward</span>
+                <span className="tabular-nums">-{'\u20B9'}{reviewRewardDiscount.toFixed(0)}</span>
+              </div>
+            )}
             {promoRewardItems.length > 0 && (
               <div className="flex justify-between text-emerald-300">
                 <span className="text-[13px]">Free items added</span>
@@ -1055,6 +1516,19 @@ export default function CartPage() {
           initialCustomizations={editingItem.customizations}
           onClose={() => setEditingItem(null)}
           onConfirm={handleEditConfirm}
+        />
+      )}
+      {pendingSuggestedItem && (
+        <CustomizationModal
+          item={pendingSuggestedItem.menuItem}
+          initialQuantity={pendingSuggestedItem.quantity}
+          onClose={() => setPendingSuggestedItem(null)}
+          onConfirm={(menuItem, quantity, customizations) => {
+            removeItem(pendingSuggestedItem.cartItemId);
+            addItem(menuItem, quantity, customizations);
+            setPendingSuggestedItem(null);
+            showToast(`${menuItem.name} add-ons updated`);
+          }}
         />
       )}
     </div>

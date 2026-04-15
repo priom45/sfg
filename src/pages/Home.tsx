@@ -218,6 +218,7 @@ export default function Home() {
           <HorizontalRail
             icon={<Flame size={18} className="text-orange-400" strokeWidth={2.5} />}
             title={popularityContext.title}
+            subtitle={popularityContext.subtitle}
             items={bestSellers}
             onImageClick={handleImageClick}
             onAdd={handleAdd}

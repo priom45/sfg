@@ -18,6 +18,8 @@ interface CreateCounterOrderPayload {
   discount: number;
   total: number;
   paymentMethod: PaymentMethod;
+  reviewRewardCouponId?: string;
+  reviewRewardDiscountAmount?: number;
   items: CounterOrderItemInput[];
 }
 

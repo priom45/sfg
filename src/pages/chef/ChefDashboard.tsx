@@ -11,7 +11,7 @@ import { markOrderReady } from '../../lib/markOrderReady';
 import { playNewOrderAlert, playAcceptSound, playOrderCompleteSound } from '../../lib/sounds';
 import { useToast } from '../../components/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import type { Order } from '../../types';
+import type { CounterPaymentMethod, Order } from '../../types';
 
 interface OrderItemRow {
   id: string;
@@ -24,8 +24,14 @@ interface OrderItemRow {
 }
 
 type Tab = 'payments' | 'queue' | 'preparing' | 'done';
+type PaymentDraft = {
+  method: CounterPaymentMethod;
+  cashReceived: string;
+};
+
 const ACTIVE_ORDER_STATUSES = ['pending', 'confirmed', 'preparing', 'packed'] as const;
 const CHEF_REFRESH_DEBOUNCE_MS = 250;
+const CHEF_POLL_INTERVAL_MS = 5000;
 
 export default function ChefDashboard() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -36,6 +42,7 @@ export default function ChefDashboard() {
   const [newOrderFlash, setNewOrderFlash] = useState(false);
   const [acceptingOrderId, setAcceptingOrderId] = useState<string | null>(null);
   const [payingOrderId, setPayingOrderId] = useState<string | null>(null);
+  const [paymentDrafts, setPaymentDrafts] = useState<Record<string, PaymentDraft>>({});
   const [completingOrderId, setCompletingOrderId] = useState<string | null>(null);
   const [handoffOrderId, setHandoffOrderId] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -45,6 +52,7 @@ export default function ChefDashboard() {
   const initialLoadRef = useRef(true);
   const flashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadOrders = useCallback(async () => {
     const today = new Date();
@@ -138,24 +146,45 @@ export default function ChefDashboard() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => {
         scheduleRefresh();
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          scheduleRefresh();
+        }
 
-    const handleVisibilityChange = () => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          scheduleRefresh();
+        }
+      });
+
+    const refreshIfVisible = () => {
       if (document.visibilityState === 'visible') {
         void loadOrders();
       }
     };
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    pollingIntervalRef.current = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        scheduleRefresh();
+      }
+    }, CHEF_POLL_INTERVAL_MS);
+
+    document.addEventListener('visibilitychange', refreshIfVisible);
+    window.addEventListener('focus', refreshIfVisible);
+    window.addEventListener('online', refreshIfVisible);
 
     return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
       if (refreshTimeoutRef.current) {
         clearTimeout(refreshTimeoutRef.current);
       }
       if (flashTimeoutRef.current) {
         clearTimeout(flashTimeoutRef.current);
       }
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener('visibilitychange', refreshIfVisible);
+      window.removeEventListener('focus', refreshIfVisible);
+      window.removeEventListener('online', refreshIfVisible);
       supabase.removeChannel(channel);
     };
   }, [loadOrders, scheduleRefresh]);
@@ -239,13 +268,25 @@ export default function ChefDashboard() {
     }
   }
 
-  async function markPaymentCollected(order: Order) {
+  async function markPaymentCollected(
+    order: Order,
+    counterPaymentMethod: CounterPaymentMethod,
+    cashReceivedAmount?: number,
+  ) {
     if (payingOrderId === order.id) return;
     setPayingOrderId(order.id);
 
     try {
-      const result = await markOrderPaid(order.order_id);
-      showToast('Payment marked as paid');
+      const result = await markOrderPaid(order.order_id, {
+        counterPaymentMethod,
+        cashReceivedAmount,
+      });
+      showToast(counterPaymentMethod === 'cash' ? 'Cash payment marked as paid' : 'Online payment marked as paid');
+      setPaymentDrafts((current) => {
+        const next = { ...current };
+        delete next[order.id];
+        return next;
+      });
       await loadOrders();
 
       if (result.receiptEmailSent === false) {
@@ -254,8 +295,9 @@ export default function ChefDashboard() {
     } catch (error) {
       console.error('Failed to mark payment as paid', error);
       showToast('Failed to mark payment as paid', 'error');
+    } finally {
+      setPayingOrderId(null);
     }
-    setPayingOrderId(null);
   }
 
   async function handleSignOut() {
@@ -266,6 +308,23 @@ export default function ChefDashboard() {
   function copyOrderId(orderId: string) {
     navigator.clipboard.writeText(orderId);
     showToast('Order ID copied');
+  }
+
+  function updatePaymentDraft(order: Order, patch: Partial<PaymentDraft>) {
+    setPaymentDrafts((current) => {
+      const existing = current[order.id] || {
+        method: getDefaultCounterPaymentMethod(order),
+        cashReceived: getDefaultCashReceived(order),
+      };
+
+      return {
+        ...current,
+        [order.id]: {
+          ...existing,
+          ...patch,
+        },
+      };
+    });
   }
 
   const paymentOrders = orders.filter((o) => o.status === 'pending' && isAwaitingCounterPayment(o));
@@ -281,10 +340,10 @@ export default function ChefDashboard() {
     .sort((a, b) => getDoneOrderTime(b) - getDoneOrderTime(a));
 
   const tabs: { key: Tab; label: string; count: number; icon: typeof Clock }[] = [
-    { key: 'payments', label: 'Payments', count: paymentOrders.length, icon: Wallet },
     { key: 'queue', label: 'Queue', count: queueOrders.length, icon: Users },
     { key: 'preparing', label: 'Preparing', count: preparingOrders.length, icon: Flame },
     { key: 'done', label: 'Done', count: todayDone.length, icon: Check },
+    { key: 'payments', label: 'Payments', count: paymentOrders.length, icon: Wallet },
   ];
 
   const displayOrders = tab === 'payments'
@@ -419,8 +478,19 @@ export default function ChefDashboard() {
           const isQueue = order.status === 'pending' && !isPaymentPending;
           const isPreparing = order.status === 'preparing' || order.status === 'confirmed';
           const isReady = order.status === 'packed';
-          const isPaymentTab = tab === 'payments';
           const totalQty = items.reduce((s, i) => s + i.quantity, 0);
+          const paymentDraft = paymentDrafts[order.id] || {
+            method: getDefaultCounterPaymentMethod(order),
+            cashReceived: getDefaultCashReceived(order),
+          };
+          const totalDue = roundCurrency(order.total);
+          const hasCashInput = paymentDraft.cashReceived.trim().length > 0;
+          const enteredCashAmount = Number(paymentDraft.cashReceived);
+          const hasValidCashAmount = Number.isFinite(enteredCashAmount);
+          const roundedEnteredCashAmount = hasValidCashAmount ? roundCurrency(enteredCashAmount) : 0;
+          const remainingCash = Math.max(0, roundCurrency(totalDue - roundedEnteredCashAmount));
+          const changeDue = Math.max(0, roundCurrency(roundedEnteredCashAmount - totalDue));
+          const canMarkCashPaid = totalDue <= 0 || (hasCashInput && hasValidCashAmount && roundedEnteredCashAmount >= totalDue);
 
           return (
             <div
@@ -506,25 +576,100 @@ export default function ChefDashboard() {
 
               {isPaymentPending && (
                 <div className="rounded-xl border-2 border-rose-500/20 bg-rose-500/5 p-3 mb-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-start gap-2">
                       <Wallet size={16} className="text-rose-400" />
                       <div>
                         <p className="text-[13px] font-bold text-rose-400">
                           {getPendingPaymentLabel(order)}
                         </p>
                         <p className="text-[11px] text-brand-text-dim">
-                          {order.payment_method === 'upi' ? 'Check the customer UPI payment and then mark paid' : 'Collect cash at the counter and then mark paid'} -- {order.order_id} -- {'\u20B9'}{order.total}
+                          Choose how this order was paid, then confirm it here. -- {order.order_id} -- {'\u20B9'}{order.total}
                         </p>
                       </div>
                     </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => updatePaymentDraft(order, {
+                          method: 'cash',
+                          cashReceived: paymentDraft.cashReceived || getDefaultCashReceived(order),
+                        })}
+                        className={`px-3 py-2 rounded-lg border text-[12px] font-bold transition-colors ${
+                          paymentDraft.method === 'cash'
+                            ? 'border-emerald-400 bg-emerald-500 text-white'
+                            : 'border-rose-500/20 bg-brand-surface text-brand-text-muted hover:border-rose-400/40'
+                        }`}
+                      >
+                        Hand Cash
+                      </button>
+                      <button
+                        onClick={() => updatePaymentDraft(order, { method: 'online' })}
+                        className={`px-3 py-2 rounded-lg border text-[12px] font-bold transition-colors ${
+                          paymentDraft.method === 'online'
+                            ? 'border-sky-400 bg-sky-500 text-white'
+                            : 'border-rose-500/20 bg-brand-surface text-brand-text-muted hover:border-rose-400/40'
+                        }`}
+                      >
+                        Paid Online
+                      </button>
+                    </div>
+
+                    {paymentDraft.method === 'cash' ? (
+                      <div className="rounded-lg border border-rose-500/20 bg-brand-surface/70 p-3 space-y-2">
+                        <label className="block">
+                          <span className="text-[11px] font-semibold uppercase tracking-wider text-brand-text-dim">
+                            Cash Received
+                          </span>
+                          <input
+                            type="number"
+                            min={totalDue > 0 ? totalDue : 0}
+                            step="0.01"
+                            value={paymentDraft.cashReceived}
+                            onChange={(event) => updatePaymentDraft(order, { cashReceived: event.target.value })}
+                            placeholder={`₹${formatMoney(totalDue)}`}
+                            className="mt-1.5 w-full rounded-lg border border-brand-border bg-brand-surface px-3 py-2 text-sm text-white outline-none transition-colors focus:border-emerald-400"
+                          />
+                        </label>
+                        <div className="flex items-center justify-between text-[11px] text-brand-text-dim">
+                          <span>Total due</span>
+                          <span className="font-semibold text-white">{'\u20B9'}{formatMoney(totalDue)}</span>
+                        </div>
+                        {hasCashInput && (
+                          <p className={`text-[11px] font-semibold ${
+                            remainingCash > 0 ? 'text-rose-300' : 'text-emerald-300'
+                          }`}>
+                            {remainingCash > 0
+                              ? `Need ₹${formatMoney(remainingCash)} more`
+                              : changeDue > 0
+                                ? `Return ₹${formatMoney(changeDue)} change`
+                                : 'Exact cash received'}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-2">
+                        <p className="text-[11px] text-sky-200">
+                          Use this when the customer has already paid by UPI or another online counter payment.
+                        </p>
+                      </div>
+                    )}
+
                     <button
-                      onClick={() => markPaymentCollected(order)}
-                      disabled={payingOrderId === order.id}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-500 text-white text-[12px] font-bold hover:bg-emerald-600 transition-colors active:scale-95 flex items-center gap-1 disabled:cursor-not-allowed disabled:opacity-60"
+                      onClick={() => markPaymentCollected(
+                        order,
+                        paymentDraft.method,
+                        paymentDraft.method === 'cash' && hasValidCashAmount ? roundedEnteredCashAmount : undefined,
+                      )}
+                      disabled={payingOrderId === order.id || (paymentDraft.method === 'cash' && !canMarkCashPaid)}
+                      className="w-full px-3 py-2.5 rounded-lg bg-emerald-500 text-white text-[12px] font-bold hover:bg-emerald-600 transition-colors active:scale-95 flex items-center justify-center gap-1 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <Check size={12} />
-                      {payingOrderId === order.id ? 'Marking...' : 'Mark Paid'}
+                      {payingOrderId === order.id
+                        ? 'Marking...'
+                        : paymentDraft.method === 'cash'
+                          ? 'Mark Cash Paid'
+                          : 'Mark Online Paid'}
                     </button>
                   </div>
                   <p className="mt-2 text-[11px] text-brand-text-dim">
@@ -535,26 +680,18 @@ export default function ChefDashboard() {
 
               {order.payment_status !== 'paid' && !isPaymentPending && (isQueue || isPreparing || isReady) && (
                 <div className="rounded-xl border-2 border-red-500/20 bg-red-500/5 p-3 mb-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Wallet size={16} className="text-red-400" />
-                      <div>
-                        <p className="text-[13px] font-bold text-red-400">
-                          {order.payment_method === 'upi' ? 'UPI Payment Pending' : 'Cash Pending'}
-                        </p>
-                        <p className="text-[11px] text-brand-text-dim">
-                          {order.payment_method === 'upi' ? 'Verify UPI received' : 'Collect cash'} -- {'\u20B9'}{order.total}
-                        </p>
-                      </div>
+                  <div className="flex items-center gap-2">
+                    <Wallet size={16} className="text-red-400" />
+                    <div>
+                      <p className="text-[13px] font-bold text-red-400">
+                        {order.payment_method === 'upi' ? 'UPI Payment Pending' : 'Cash Pending'}
+                      </p>
+                      <p className="text-[11px] text-brand-text-dim">
+                        {order.payment_method === 'upi'
+                          ? 'Payment still needs confirmation in the payments panel'
+                          : 'Cash still needs to be collected in the payments panel'} -- {'\u20B9'}{order.total}
+                      </p>
                     </div>
-                    <button
-                      onClick={() => markPaymentCollected(order)}
-                      disabled={payingOrderId === order.id}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-500 text-white text-[12px] font-bold hover:bg-emerald-600 transition-colors active:scale-95 flex items-center gap-1 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <Check size={12} />
-                      {payingOrderId === order.id ? 'Marking...' : 'Mark Paid'}
-                    </button>
                   </div>
                 </div>
               )}
@@ -604,14 +741,6 @@ export default function ChefDashboard() {
                   <Zap size={18} />
                   {acceptingOrderId === order.id ? 'Starting...' : 'Accept & Start Preparing'}
                 </button>
-              )}
-
-              {isPaymentTab && isPaymentPending && (
-                <div className="mt-2 rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-center">
-                  <p className="text-[12px] font-semibold text-rose-300">
-                    Waiting for counter payment confirmation for order <span className="font-black text-white">{order.order_id}</span>
-                  </p>
-                </div>
               )}
 
               {isPreparing && (
@@ -697,6 +826,23 @@ function getTimeAgo(dateStr: string) {
 
 function getDoneOrderTime(order: Order) {
   return new Date(order.completed_at || order.placed_at).getTime();
+}
+
+function getDefaultCounterPaymentMethod(order: Order): CounterPaymentMethod {
+  return order.payment_method === 'upi' ? 'online' : 'cash';
+}
+
+function getDefaultCashReceived(order: Order) {
+  return order.total > 0 ? formatMoney(order.total) : '';
+}
+
+function roundCurrency(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function formatMoney(value: number) {
+  const rounded = roundCurrency(value);
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2);
 }
 
 function PrepTimer({ acceptedAt, estimatedMinutes }: { acceptedAt: string; estimatedMinutes: number }) {

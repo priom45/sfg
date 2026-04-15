@@ -67,7 +67,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: order, error: orderError } = await adminClient
       .from("orders")
-      .select("id, order_id, user_id, payment_status, payment_provider, payment_method, razorpay_order_id, razorpay_payment_id, razorpay_signature, payment_verified_at, status")
+      .select("id, order_id, user_id, payment_status, payment_provider, payment_method, razorpay_order_id, razorpay_payment_id, razorpay_signature, payment_verified_at, review_reward_coupon_id, review_reward_discount_amount, status")
       .eq("order_id", normalizedOrderId)
       .maybeSingle();
 

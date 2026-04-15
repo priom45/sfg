@@ -22,6 +22,8 @@ interface CreateRazorpayOrderPayload {
   subtotal: number;
   discount: number;
   total: number;
+  reviewRewardCouponId?: string;
+  reviewRewardDiscountAmount?: number;
   items: RazorpayCartItemInput[];
 }
 

@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { createHmac } from "node:crypto";
+import { releaseReviewRewardCoupon } from "./review-rewards.ts";
 
 export type AdminClient = ReturnType<typeof createClient>;
 
@@ -35,6 +36,8 @@ export interface OrderRecord {
   razorpay_payment_id: string | null;
   razorpay_signature: string | null;
   payment_verified_at: string | null;
+  review_reward_coupon_id: string | null;
+  review_reward_discount_amount: number | null;
   status: string;
 }
 
@@ -59,6 +62,8 @@ const ORDER_SELECT_FIELDS = `
   razorpay_payment_id,
   razorpay_signature,
   payment_verified_at,
+  review_reward_coupon_id,
+  review_reward_discount_amount,
   status
 `;
 
@@ -505,7 +510,12 @@ export async function markOrderPaymentFailed(
   }
 
   if (data) {
-    return data as OrderRecord;
+    const failedOrder = data as OrderRecord;
+    if (failedOrder.review_reward_coupon_id) {
+      await releaseReviewRewardCoupon(adminClient, failedOrder);
+      return getLatestOrderState(adminClient, order.id);
+    }
+    return failedOrder;
   }
 
   return getLatestOrderState(adminClient, order.id);

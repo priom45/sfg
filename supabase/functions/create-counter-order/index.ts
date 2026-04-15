@@ -1,5 +1,10 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import {
+  calculateReviewRewardDiscount,
+  getReviewRewardCouponForCheckout,
+  reserveReviewRewardCoupon,
+} from "../_shared/review-rewards.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -26,6 +31,8 @@ interface CreateBody {
   discount?: number;
   total?: number;
   paymentMethod?: "cod" | "upi" | "card";
+  reviewRewardCouponId?: string;
+  reviewRewardDiscountAmount?: number;
   items?: CounterOrderItem[];
 }
 
@@ -45,10 +52,20 @@ type AppOrderInsert = {
   total: number;
   payment_method: "cod" | "upi" | "card";
   payment_status: "pending" | "paid";
+  review_reward_coupon_id: string | null;
+  review_reward_discount_amount: number;
 };
 
-type AppOrderInsertCompat = Omit<AppOrderInsert, "pickup_option" | "takeaway_fee"> &
-  Partial<Pick<AppOrderInsert, "pickup_option" | "takeaway_fee">>;
+type AppOrderInsertCompat = Omit<
+  AppOrderInsert,
+  "pickup_option" | "takeaway_fee" | "review_reward_coupon_id" | "review_reward_discount_amount"
+> &
+  Partial<
+    Pick<
+      AppOrderInsert,
+      "pickup_option" | "takeaway_fee" | "review_reward_coupon_id" | "review_reward_discount_amount"
+    >
+  >;
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -59,7 +76,11 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
 
 function isMissingOrderColumn(
   error: { code?: string; message?: string } | null,
-  columnName: "pickup_option" | "takeaway_fee",
+  columnName:
+    | "pickup_option"
+    | "takeaway_fee"
+    | "review_reward_coupon_id"
+    | "review_reward_discount_amount",
 ) {
   return !!error?.message?.includes(columnName) &&
     (error.code === "42703" || error.code === "PGRST204");
@@ -115,7 +136,12 @@ async function createAppOrder(
     .select("id, order_id")
     .single();
 
-  if (isMissingOrderColumn(error, "pickup_option") || isMissingOrderColumn(error, "takeaway_fee")) {
+  if (
+    isMissingOrderColumn(error, "pickup_option")
+    || isMissingOrderColumn(error, "takeaway_fee")
+    || isMissingOrderColumn(error, "review_reward_coupon_id")
+    || isMissingOrderColumn(error, "review_reward_discount_amount")
+  ) {
     const legacyInsert: AppOrderInsertCompat = { ...orderInsert };
 
     if (isMissingOrderColumn(error, "pickup_option")) {
@@ -126,6 +152,14 @@ async function createAppOrder(
       delete legacyInsert.takeaway_fee;
     }
 
+    if (isMissingOrderColumn(error, "review_reward_coupon_id")) {
+      delete legacyInsert.review_reward_coupon_id;
+    }
+
+    if (isMissingOrderColumn(error, "review_reward_discount_amount")) {
+      delete legacyInsert.review_reward_discount_amount;
+    }
+
     ({ data, error } = await adminClient
       .from("orders")
       .insert(legacyInsert)
@@ -134,6 +168,29 @@ async function createAppOrder(
   }
 
   return { data, error };
+}
+
+async function cleanupCreatedOrder(
+  adminClient: ReturnType<typeof createClient>,
+  orderId: string,
+) {
+  const { error: orderItemsDeleteError } = await adminClient
+    .from("order_items")
+    .delete()
+    .eq("order_id", orderId);
+
+  if (orderItemsDeleteError) {
+    throw orderItemsDeleteError;
+  }
+
+  const { error: orderDeleteError } = await adminClient
+    .from("orders")
+    .delete()
+    .eq("id", orderId);
+
+  if (orderDeleteError) {
+    throw orderDeleteError;
+  }
 }
 
 async function requestReceiptEmail(
@@ -207,6 +264,8 @@ Deno.serve(async (req: Request) => {
     const subtotal = Number(body.subtotal ?? 0);
     const discount = Number(body.discount ?? 0);
     const total = Number(body.total ?? 0);
+    const reviewRewardCouponId = body.reviewRewardCouponId?.trim() || "";
+    const reviewRewardDiscountAmount = Number(body.reviewRewardDiscountAmount ?? 0);
     const takeawayFee = pickupOption === "takeaway" ? TAKEAWAY_FEE : 0;
     const expectedTotal = roundCurrency(Math.max(0, subtotal - discount) + takeawayFee);
 
@@ -228,6 +287,14 @@ Deno.serve(async (req: Request) => {
 
     if (!Number.isFinite(total) || total < 0) {
       return jsonResponse({ success: false, error: "Invalid order total" }, 400);
+    }
+
+    if (!Number.isFinite(reviewRewardDiscountAmount) || reviewRewardDiscountAmount < 0) {
+      return jsonResponse({ success: false, error: "Invalid review reward discount" }, 400);
+    }
+
+    if (!reviewRewardCouponId && reviewRewardDiscountAmount > 0) {
+      return jsonResponse({ success: false, error: "Review reward coupon is required for this discount" }, 400);
     }
 
     if (Math.abs(roundCurrency(total) - expectedTotal) > 0.01) {
@@ -283,6 +350,28 @@ Deno.serve(async (req: Request) => {
       }, 409);
     }
 
+    let expectedReviewRewardDiscount = 0;
+    if (reviewRewardCouponId) {
+      const reviewRewardCoupon = await getReviewRewardCouponForCheckout(adminClient, reviewRewardCouponId, user.id);
+
+      if (!reviewRewardCoupon) {
+        return jsonResponse({ success: false, error: "Review reward coupon not found" }, 404);
+      }
+
+      if (reviewRewardCoupon.is_redeemed) {
+        return jsonResponse({ success: false, error: "This review reward has already been used" }, 409);
+      }
+
+      expectedReviewRewardDiscount = calculateReviewRewardDiscount(
+        subtotal,
+        Number(reviewRewardCoupon.discount_percentage ?? 10),
+      );
+
+      if (reviewRewardDiscountAmount !== expectedReviewRewardDiscount) {
+        return jsonResponse({ success: false, error: "Review reward discount mismatch" }, 400);
+      }
+    }
+
     const paymentStatus = total <= 0 ? "paid" : "pending";
 
     const orderInsert: AppOrderInsert = {
@@ -301,6 +390,8 @@ Deno.serve(async (req: Request) => {
       total,
       payment_method: paymentMethod,
       payment_status: paymentStatus,
+      review_reward_coupon_id: reviewRewardCouponId || null,
+      review_reward_discount_amount: expectedReviewRewardDiscount,
     };
 
     const { data: order, error: orderError } = await createAppOrder(adminClient, orderInsert);
@@ -321,8 +412,22 @@ Deno.serve(async (req: Request) => {
     );
 
     if (itemsError) {
-      await adminClient.from("orders").delete().eq("id", order.id);
+      await cleanupCreatedOrder(adminClient, order.id);
       throw itemsError;
+    }
+
+    if (reviewRewardCouponId) {
+      const reservedReviewReward = await reserveReviewRewardCoupon(
+        adminClient,
+        reviewRewardCouponId,
+        user.id,
+        order.id,
+      );
+
+      if (!reservedReviewReward) {
+        await cleanupCreatedOrder(adminClient, order.id);
+        throw new Error("This review reward is no longer available");
+      }
     }
 
     const emailType = paymentStatus === "paid" ? "receipt" : "confirmation";

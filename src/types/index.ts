@@ -146,6 +146,7 @@ export type OrderType = 'delivery' | 'pickup';
 export type PickupOption = 'dine_in' | 'takeaway';
 export type PaymentMethod = 'upi' | 'card' | 'cod';
 export type PaymentProvider = 'razorpay' | null;
+export type CounterPaymentMethod = 'cash' | 'online';
 
 export interface Order {
   id: string;
@@ -165,6 +166,10 @@ export interface Order {
   payment_method: PaymentMethod;
   payment_provider: PaymentProvider;
   payment_status: string;
+  counter_payment_method?: CounterPaymentMethod | null;
+  cash_received_amount?: number | null;
+  review_reward_coupon_id?: string | null;
+  review_reward_discount_amount?: number | null;
   razorpay_order_id: string | null;
   razorpay_payment_id: string | null;
   razorpay_signature: string | null;
@@ -188,4 +193,28 @@ export interface OrderItem {
   quantity: number;
   unit_price: number;
   customizations: SelectedCustomization[];
+  created_at?: string;
+}
+
+export interface ItemReview {
+  id: string;
+  user_id: string;
+  order_id: string;
+  order_item_id: string;
+  menu_item_id: string;
+  rating: number;
+  comment: string;
+  created_at: string;
+}
+
+export interface ReviewRewardCoupon {
+  id: string;
+  user_id: string;
+  item_review_id: string;
+  code: string;
+  discount_percentage: number;
+  is_redeemed: boolean;
+  redeemed_order_id: string | null;
+  redeemed_at: string | null;
+  created_at: string;
 }

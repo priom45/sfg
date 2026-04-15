@@ -10,6 +10,19 @@ const corsHeaders = {
 
 interface MarkPaidBody {
   orderId?: string;
+  counterPaymentMethod?: "cash" | "online";
+  cashReceivedAmount?: number;
+}
+
+function roundCurrency(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function getCounterPaymentMethod(value: unknown) {
+  if (value === "online" || value === "cash") {
+    return value;
+  }
+  return null;
 }
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
@@ -75,7 +88,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: false, error: "Missing authorization" }, 401);
     }
 
-    const { orderId } = await req.json() as MarkPaidBody;
+    const { orderId, counterPaymentMethod, cashReceivedAmount } = await req.json() as MarkPaidBody;
     const appOrderId = orderId?.trim() || "";
 
     if (!appOrderId) {
@@ -118,7 +131,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: order, error: orderError } = await adminClient
       .from("orders")
-      .select("id, order_id, payment_status")
+      .select("id, order_id, total, payment_status, payment_provider, payment_method")
       .eq("order_id", appOrderId)
       .maybeSingle();
 
@@ -126,13 +139,40 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: false, error: "Order not found" }, 404);
     }
 
+    const orderTotal = roundCurrency(Number(order.total ?? 0));
+    const selectedCounterPaymentMethod = getCounterPaymentMethod(counterPaymentMethod) ??
+      (order.payment_method === "upi" ? "online" : "cash");
+    const rawCashAmount = Number(cashReceivedAmount ?? orderTotal);
+    const cashAmount = roundCurrency(rawCashAmount);
+
+    if (
+      order.payment_provider !== "razorpay" &&
+      selectedCounterPaymentMethod === "cash" &&
+      orderTotal > 0 &&
+      (!Number.isFinite(cashAmount) || cashAmount < orderTotal)
+    ) {
+      return jsonResponse({
+        success: false,
+        error: `Cash received must be at least ₹${orderTotal.toFixed(2)}`,
+      }, 400);
+    }
+
     if (order.payment_status !== "paid") {
+      const paymentUpdate: Record<string, string | number | null> = {
+        payment_status: "paid",
+        payment_verified_at: new Date().toISOString(),
+      };
+
+      if (order.payment_provider !== "razorpay") {
+        paymentUpdate.payment_method = selectedCounterPaymentMethod === "online" ? "upi" : "cod";
+        paymentUpdate.payment_provider = null;
+        paymentUpdate.counter_payment_method = selectedCounterPaymentMethod;
+        paymentUpdate.cash_received_amount = selectedCounterPaymentMethod === "cash" ? cashAmount : null;
+      }
+
       const { error: updateError } = await adminClient
         .from("orders")
-        .update({
-          payment_status: "paid",
-          payment_verified_at: new Date().toISOString(),
-        })
+        .update(paymentUpdate)
         .eq("id", order.id);
 
       if (updateError) {

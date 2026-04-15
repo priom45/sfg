@@ -5,7 +5,7 @@ const BUSINESS_TIMEZONE = 'Asia/Kolkata';
 const POPULARITY_LOOKBACK_DAYS = 14;
 const ORDER_ITEM_CHUNK_SIZE = 250;
 
-export type MenuTimeSlotKey = 'afternoon' | 'evening' | 'all_day';
+export type MenuTimeSlotKey = 'afternoon' | 'evening' | 'best_sellers' | 'all_day';
 
 type OrderPopularityRow = {
   id: string;
@@ -52,8 +52,9 @@ function matchesToken(value: string, token: string) {
 }
 
 function getSlotKeyFromHour(hour: number): MenuTimeSlotKey {
-  if (hour >= 12 && hour < 17) return 'afternoon';
-  if (hour >= 17 && hour < 22) return 'evening';
+  if (hour >= 12 && hour < 16) return 'afternoon';
+  if (hour >= 16 && hour < 19) return 'evening';
+  if (hour >= 19) return 'best_sellers';
   return 'all_day';
 }
 
@@ -67,34 +68,52 @@ function getCurrentSlotKey(now = new Date()) {
 }
 
 function getSlotTitle(slotKey: MenuTimeSlotKey) {
-  void slotKey;
+  if (slotKey === 'afternoon') {
+    return 'Summer Afternoon Picks';
+  }
+
+  if (slotKey === 'evening') {
+    return 'Evening Cravings';
+  }
+
+  if (slotKey === 'best_sellers') {
+    return 'Best Sellers';
+  }
+
   return 'Best Sellers';
 }
 
 function getSlotSubtitle(slotKey: MenuTimeSlotKey, hasLiveData: boolean) {
   if (slotKey === 'afternoon') {
     return hasLiveData
-      ? 'Sorted from recent afternoon orders so cold drinks and dessert picks rise first.'
-      : 'We will push afternoon favorites here as more orders come in.';
+      ? 'Summer coolers, shakes, ice creams, and quick bites are moving fastest this afternoon.'
+      : 'Summer-friendly picks for the afternoon rush.';
   }
 
   if (slotKey === 'evening') {
     return hasLiveData
-      ? 'Sorted from recent evening orders so snacks, chats, chicken, and waffles rise first.'
-      : 'We will push evening cravings here as more orders come in.';
+      ? 'From 4 PM onward, fries, chats, momos, chicken, and waffles take over.'
+      : 'Hot evening cravings start rolling from 4 PM.';
+  }
+
+  if (slotKey === 'best_sellers') {
+    return hasLiveData
+      ? 'From 7 PM onward, the most-ordered items move to the top.'
+      : 'From 7 PM onward, your best sellers lead the menu.';
   }
 
   return hasLiveData
-    ? 'Sorted from recent orders so the most-picked items rise to the top.'
-    : 'We will surface your most-ordered items here once enough history builds.';
+    ? 'The favorites people keep coming back for all day.'
+    : 'Popular picks your crowd will build over time.';
 }
 
 function getFallbackTokenGroups(slotKey: MenuTimeSlotKey) {
   if (slotKey === 'afternoon') {
     return [
-      ['thick shake', 'thickshake'],
-      ['milkshake', 'milk shake'],
-      ['ice cream', 'scoop'],
+      ['cool drink', 'cold drink', 'soft drink', 'juice', 'mojito', 'cold coffee'],
+      ['thick shake', 'thickshake', 'milkshake', 'milk shake'],
+      ['ice cream', 'scoop', 'falooda'],
+      ['water bottle', 'mineral water'],
       ['dessert'],
       ['waffle'],
     ];
@@ -102,11 +121,23 @@ function getFallbackTokenGroups(slotKey: MenuTimeSlotKey) {
 
   if (slotKey === 'evening') {
     return [
-      ['chaat', 'chat'],
-      ['chicken snack', 'chicken'],
       ['fries'],
       ['momo'],
+      ['chaat', 'chat'],
+      ['burger', 'sandwich', 'wrap', 'roll'],
+      ['chicken snack', 'chicken'],
       ['waffle'],
+    ];
+  }
+
+  if (slotKey === 'best_sellers') {
+    return [
+      ['waffle'],
+      ['fries'],
+      ['momo'],
+      ['milkshake', 'milk shake'],
+      ['dessert'],
+      ['burger', 'sandwich', 'wrap', 'roll'],
     ];
   }
 
@@ -272,7 +303,9 @@ export async function fetchMenuPopularity(
       }
     });
 
-    const itemScores = toRecord(slotItemScores);
+    const itemScores = slotKey === 'best_sellers'
+      ? toRecord(allDayItemScores)
+      : toRecord(slotItemScores);
     const fallbackItemScores = toRecord(allDayItemScores);
     const categoryScores = items.reduce<Record<string, number>>((acc, item) => {
       const score = itemScores[item.id] || 0;
