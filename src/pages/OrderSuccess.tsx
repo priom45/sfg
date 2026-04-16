@@ -425,11 +425,11 @@ export default function OrderSuccessPage() {
             >
               <Clock size={40} className={`${reconcilingPayment ? 'text-sky-400 animate-spin' : 'text-sky-400'}`} />
             </motion.div>
-            <h1 className="text-2xl font-extrabold tracking-tight text-white mb-2">Payment Processing</h1>
+            <h1 className="text-2xl font-extrabold tracking-tight text-white mb-2">Confirming Your Order</h1>
             <p className="text-brand-text-muted mb-8">
               {reconcilingPayment
-                ? 'We are checking your Razorpay payment now. If money was debited, your order will update automatically.'
-                : 'Your payment is still being verified. If money was debited, no further action is needed.'}
+                ? 'Payment response received. We are confirming it with Razorpay. This usually takes a few seconds.'
+                : 'If your payment was completed, no extra action is needed. Your order will update automatically.'}
             </p>
           </motion.div>
         )}
@@ -578,7 +578,7 @@ export default function OrderSuccessPage() {
           {isOnlinePaymentPending && (
             <div className="mt-4 flex items-center justify-center gap-2 bg-sky-500/10 rounded-2xl px-4 py-3 border border-sky-500/20">
               <Clock size={16} className={`${reconcilingPayment ? 'text-sky-400 animate-spin' : 'text-sky-400'}`} />
-              <span className="text-[14px] font-bold text-sky-400">Online payment verification in progress.</span>
+              <span className="text-[14px] font-bold text-sky-400">Payment received. Confirming order...</span>
             </div>
           )}
 
@@ -627,7 +627,7 @@ export default function OrderSuccessPage() {
           {isOnlinePaymentPending && (
             <div className="mt-4 bg-sky-500/5 rounded-2xl px-4 py-3">
               <p className="text-[14px] text-brand-text-muted font-semibold">
-                We are confirming your Razorpay payment with the server. If the amount was debited, this order will move into the kitchen queue automatically.
+                We are confirming your Razorpay payment before moving this order into the kitchen queue.
               </p>
             </div>
           )}
