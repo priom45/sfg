@@ -133,6 +133,32 @@ function getStockStatus(item: MenuItem) {
   };
 }
 
+function getEditingVisibilityResult(editing: ItemForm) {
+  if (!editing.manual_availability) {
+    return {
+      title: 'Customers will not see this item',
+      detail: 'Untick hide to allow this item back on the menu.',
+    };
+  }
+
+  if (
+    editing.track_inventory &&
+    Math.max(0, Number.parseInt(editing.available_quantity || '0', 10) || 0) <= 0
+  ) {
+    return {
+      title: 'Customers will not see this item until stock is added',
+      detail: 'When quantity reaches 0, the item hides automatically.',
+    };
+  }
+
+  return {
+    title: 'Customers can order this item',
+    detail: editing.track_inventory
+      ? 'Stock tracking will hide it automatically at 0.'
+      : 'Manual visibility controls whether it appears on the menu.',
+  };
+}
+
 async function repairMalformedMenuItemImageUrls(items: MenuItem[]) {
   const corrections = items
     .map((item) => ({
@@ -278,6 +304,7 @@ export default function AdminMenu() {
   });
   const outOfStockItems = trackedItems.filter((item) => getAvailableQuantity(item) <= 0);
   const totalTrackedQuantity = trackedItems.reduce((sum, item) => sum + getAvailableQuantity(item), 0);
+  const editingVisibilityResult = editing ? getEditingVisibilityResult(editing) : null;
 
   const categoryItemCountById = Object.fromEntries(
     categories.map((category) => [
@@ -886,13 +913,11 @@ export default function AdminMenu() {
             <label className="flex items-center gap-3 rounded-xl border border-brand-border bg-brand-surface-light/40 px-4 py-3 text-sm text-white">
               <input
                 type="checkbox"
-                checked={editing.manual_availability}
-                onChange={(e) => setEditing({ ...editing, manual_availability: e.target.checked })}
+                checked={!editing.manual_availability}
+                onChange={(e) => setEditing({ ...editing, manual_availability: !e.target.checked })}
                 className="h-4 w-4 accent-brand-gold"
               />
-              <span>
-                {editing.manual_availability ? 'Show item to customers when stock is available' : 'Hide item from customers'}
-              </span>
+              <span>Hide item from customers</span>
             </label>
 
             <div className="rounded-xl border border-brand-border bg-brand-surface-light/40 p-4 space-y-3">
@@ -927,24 +952,16 @@ export default function AdminMenu() {
                 </div>
                 <div className="rounded-xl border border-brand-border bg-brand-bg/60 px-4 py-3">
                   <p className="text-xs uppercase tracking-[0.18em] text-brand-text-dim">Result</p>
-                  <p className="mt-2 text-sm font-semibold text-white">
-                    {computeEffectiveAvailability(
-                      editing.manual_availability,
-                      editing.track_inventory,
-                      Math.max(0, Number.parseInt(editing.available_quantity || '0', 10) || 0),
-                    )
-                      ? 'Customers can order this item'
-                      : 'Customers will see this item as out of stock'}
-                  </p>
+                  <p className="mt-2 text-sm font-semibold text-white">{editingVisibilityResult?.title}</p>
                   <p className="mt-1 text-xs text-brand-text-muted">
-                    When quantity reaches 0, the item hides automatically.
+                    {editingVisibilityResult?.detail}
                   </p>
                 </div>
               </div>
             </div>
 
             <p className="text-sm text-brand-text-muted">
-              Stock counts are only for admin use. Customers only see whether the item is available or out of stock.
+              Stock counts are only for admin use. Hidden items do not appear on the customer menu.
             </p>
             <p className="text-sm text-brand-text-muted">
               Add-ons are assigned from the Add-On Management section below.
