@@ -238,7 +238,7 @@ function toIsoDateTime(value: string) {
 
 function normalizeImageUrl(value: string | null | undefined) {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
+  return trimmed ? trimmed.replace(/^http:\/\//i, 'https://') : null;
 }
 
 function sanitizeFileName(fileName: string) {

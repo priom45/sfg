@@ -3,6 +3,7 @@ import { Clock, Plus, Minus } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { MenuItem } from '../types';
 import { useCart } from '../contexts/CartContext';
+import { FALLBACK_IMAGE_SRC, normalizeImageUrl } from '../lib/images';
 
 interface ProductCardProps {
   item: MenuItem;
@@ -12,13 +13,13 @@ interface ProductCardProps {
 
 export default function ProductCard({ item, onImageClick, onAdd }: ProductCardProps) {
   const { items, updateQuantity, removeItem } = useCart();
-  const [imageSrc, setImageSrc] = useState(item.image_url || '/image.png');
+  const [imageSrc, setImageSrc] = useState(normalizeImageUrl(item.image_url));
 
   const cartItems = items.filter((ci) => ci.menu_item.id === item.id);
   const totalQty = cartItems.reduce((sum, ci) => sum + ci.quantity, 0);
 
   useEffect(() => {
-    setImageSrc(item.image_url || '/image.png');
+    setImageSrc(normalizeImageUrl(item.image_url));
   }, [item.image_url]);
 
   if (item.is_available === false) {
@@ -68,8 +69,8 @@ export default function ProductCard({ item, onImageClick, onAdd }: ProductCardPr
           loading="lazy"
           decoding="async"
           onError={() => {
-            if (imageSrc !== '/image.png') {
-              setImageSrc('/image.png');
+            if (imageSrc !== FALLBACK_IMAGE_SRC) {
+              setImageSrc(FALLBACK_IMAGE_SRC);
             }
           }}
           className="h-full w-full object-cover transition-transform duration-700 ease-out group-hover:scale-[1.03]"

@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 
 const INVENTORY_COLUMN_NAMES = ['available_quantity', 'manual_availability', 'track_inventory'];
 const EXPIRE_ORDERS_FUNCTION_NAME = 'expire_stale_pending_orders';
+const EXPIRE_ORDERS_UNAVAILABLE_STORAGE_KEY = 'supreme-waffle-expire-orders-rpc-unavailable';
 
 type SupabaseLikeError = {
   code?: string | null;
@@ -36,10 +37,20 @@ export async function detectInventorySchemaSupport() {
 }
 
 export async function expireStalePendingOrders() {
+  if (
+    typeof window !== 'undefined' &&
+    window.sessionStorage.getItem(EXPIRE_ORDERS_UNAVAILABLE_STORAGE_KEY) === '1'
+  ) {
+    return false;
+  }
+
   const { error } = await supabase.rpc(EXPIRE_ORDERS_FUNCTION_NAME);
 
   if (error) {
     if (isMissingExpireOrdersFunctionError(error)) {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem(EXPIRE_ORDERS_UNAVAILABLE_STORAGE_KEY, '1');
+      }
       return false;
     }
 

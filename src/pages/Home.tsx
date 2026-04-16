@@ -7,6 +7,7 @@ import { expireStalePendingOrders } from '../lib/inventorySchema';
 import { supabase } from '../lib/supabase';
 import { sortCategoriesForMenu } from '../lib/categoryOrdering';
 import { fetchMenuPopularity, type MenuPopularityContext } from '../lib/menuPopularity';
+import { normalizeImageUrl, setImageFallback } from '../lib/images';
 import { useCart } from '../contexts/CartContext';
 import { useToast } from '../components/Toast';
 import ProductCard from '../components/ProductCard';
@@ -249,11 +250,12 @@ export default function Home() {
                   className="flex w-full items-center gap-3 border-b border-brand-border px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-brand-surface-light/70"
                 >
                   <img
-                    src={item.image_url || '/image.png'}
+                    src={normalizeImageUrl(item.image_url)}
                     alt=""
                     className="h-10 w-10 rounded-lg object-cover"
                     loading="lazy"
                     decoding="async"
+                    onError={setImageFallback}
                   />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-bold text-white">{item.name}</span>
@@ -285,10 +287,11 @@ export default function Home() {
                   >
                     <div className="w-[68px] h-[68px] rounded-full overflow-hidden border-2 border-brand-border group-hover:border-brand-gold/50 transition-all">
                       <img
-                        src={cat.image_url}
+                        src={normalizeImageUrl(cat.image_url)}
                         alt={`${cat.name} waffle category`}
                         loading="lazy"
                         decoding="async"
+                        onError={setImageFallback}
                         className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
                       />
                     </div>

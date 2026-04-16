@@ -3,12 +3,8 @@ import { Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { getOfferBadgeLabel, getOfferCtaHref, getOfferCtaText, getOfferDisplayDescription, getOfferRewardLabel } from '../lib/offers';
+import { normalizeImageUrl } from '../lib/images';
 import type { MenuItem, Offer } from '../types';
-
-function normalizeImageUrl(value: string | null | undefined) {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
 
 export type OfferCarouselAction =
   | { kind: 'link'; to: string }
@@ -89,7 +85,7 @@ export default function OfferCarousel({
   const activeBannerAction = resolveAction
     ? resolveAction(activeBannerCtaHref, activeOffer)
     : defaultResolveAction(activeBannerCtaHref);
-  const requestedBannerBackgroundImage = normalizeImageUrl(activeOffer.background_image_url);
+  const requestedBannerBackgroundImage = normalizeImageUrl(activeOffer.background_image_url, '') || null;
   const activeBannerBackgroundImage = requestedBannerBackgroundImage && !failedImageUrls[requestedBannerBackgroundImage]
     ? requestedBannerBackgroundImage
     : null;

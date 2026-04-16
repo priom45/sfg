@@ -55,7 +55,8 @@ function isForeignKeyConstraintError(error: { code?: string; message?: string } 
 function normalizeImageUrl(url: string) {
   const trimmedUrl = url.trim();
   const malformedExtensionSuffixMatch = trimmedUrl.match(/^(https?:\/\/\S+\.(?:png|jpe?g|webp|gif|svg))(?:\d+)$/i);
-  return malformedExtensionSuffixMatch?.[1] || trimmedUrl;
+  const normalizedUrl = malformedExtensionSuffixMatch?.[1] || trimmedUrl;
+  return normalizedUrl.replace(/^http:\/\//i, 'https://');
 }
 
 function normalizeItemName(name: string) {

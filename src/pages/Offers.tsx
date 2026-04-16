@@ -10,7 +10,7 @@ import type { Category, MenuItem, Offer } from '../types';
 
 function normalizeImageUrl(value: string | null | undefined) {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
+  return trimmed ? trimmed.replace(/^http:\/\//i, 'https://') : null;
 }
 
 export default function OffersPage() {
