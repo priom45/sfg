@@ -124,13 +124,21 @@ function getCollectionParts(order: Order) {
   const recordedCash = getRecordedCollectionAmount(order.cash_received_amount);
   const recordedOnline = getRecordedCollectionAmount(order.online_received_amount);
 
-  if (recordedCash > 0 || recordedOnline > 0) {
+  if (channel === 'online') {
+    return { cash: 0, online: amount, total: amount };
+  }
+
+  if (channel === 'cash') {
+    return { cash: amount, online: 0, total: amount };
+  }
+
+  if (channel === 'split') {
     let online = Math.min(amount, recordedOnline);
     let cash = Math.min(Math.max(0, amount - online), recordedCash);
     const unassigned = Math.max(0, amount - online - cash);
 
     if (unassigned > 0) {
-      if (channel === 'online') {
+      if (recordedOnline > 0 && recordedCash <= 0) {
         online += unassigned;
       } else {
         cash += unassigned;
@@ -144,15 +152,13 @@ function getCollectionParts(order: Order) {
     };
   }
 
-  if (!channel) {
-    return { cash: 0, online: 0, total: 0 };
+  if (recordedCash > 0 || recordedOnline > 0) {
+    const online = Math.min(amount, recordedOnline);
+    const cash = Math.max(0, amount - online);
+    return { cash, online, total: amount };
   }
 
-  return {
-    cash: channel === 'cash' || channel === 'split' ? amount : 0,
-    online: channel === 'online' ? amount : 0,
-    total: amount,
-  };
+  return { cash: 0, online: 0, total: 0 };
 }
 
 function summarizeCollections(orders: Order[]): CollectionSummary {
