@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Link } from 'react-router-dom';
-import { ChevronRight, ChevronLeft, Clock, Sparkles, Flame } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, useMemo, type FormEvent } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ChevronRight, ChevronLeft, Clock, Sparkles, Flame, Search, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import OfferCarousel from '../components/OfferCarousel';
 import { expireStalePendingOrders } from '../lib/inventorySchema';
@@ -20,6 +20,8 @@ export default function Home() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [bestSellers, setBestSellers] = useState<MenuItem[]>([]);
   const [allItems, setAllItems] = useState<MenuItem[]>([]);
+  const [homeSearch, setHomeSearch] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
   const [popularityContext, setPopularityContext] = useState<MenuPopularityContext>({
     slotKey: 'all_day',
     title: 'Best Sellers',
@@ -36,6 +38,7 @@ export default function Home() {
   const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
   const [pendingAddOnItem, setPendingAddOnItem] = useState<{ cartItemId: string; menuItem: MenuItem; quantity: number } | null>(null);
   const [customizationAvailability, setCustomizationAvailability] = useState<CustomizationAvailability | null>(null);
+  const navigate = useNavigate();
   const { addItem, removeItem } = useCart();
   const { showToast } = useToast();
 
@@ -143,6 +146,31 @@ export default function Home() {
     () => Object.fromEntries(allItems.map((item) => [item.id, { id: item.id, category_id: item.category_id }])),
     [allItems],
   );
+  const homeSearchResults = useMemo(() => {
+    const query = homeSearch.trim().toLowerCase();
+    if (query.length < 2) return [];
+
+    return allItems
+      .filter((item) => (
+        item.is_available !== false &&
+        (
+          item.name.toLowerCase().includes(query) ||
+          item.description.toLowerCase().includes(query)
+        )
+      ))
+      .slice(0, 5);
+  }, [allItems, homeSearch]);
+
+  function handleHomeSearchSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const query = homeSearch.trim();
+    if (!query) return;
+    navigate(`/menu?search=${encodeURIComponent(query)}`);
+  }
+
+  function openSearchItem(item: MenuItem) {
+    navigate(`/menu?item=${encodeURIComponent(item.id)}`);
+  }
 
   return (
     <div className="bg-brand-bg min-h-screen pb-20">
@@ -175,6 +203,68 @@ export default function Home() {
           ))}
         </div>
       </motion.div>
+
+      <section className="px-4 py-2">
+        <form onSubmit={handleHomeSearchSubmit} className="relative mx-auto max-w-2xl">
+          <div className="relative">
+            <Search size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-brand-gold" strokeWidth={2.5} />
+            <input
+              type="text"
+              value={homeSearch}
+              onChange={(event) => setHomeSearch(event.target.value)}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => window.setTimeout(() => setSearchFocused(false), 120)}
+              placeholder="Search waffles, shakes, snacks..."
+              aria-label="Search menu items"
+              className="w-full rounded-lg border border-brand-border bg-brand-surface py-3 pl-11 pr-28 text-[15px] font-semibold text-white outline-none transition-colors placeholder:text-brand-text-dim focus:border-brand-gold"
+            />
+            {homeSearch && (
+              <button
+                type="button"
+                onClick={() => setHomeSearch('')}
+                aria-label="Clear search"
+                className="absolute right-24 top-1/2 -translate-y-1/2 rounded-lg p-1 text-brand-text-dim transition-colors hover:text-white"
+              >
+                <X size={17} strokeWidth={2.5} />
+              </button>
+            )}
+            <button
+              type="submit"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg bg-brand-gold px-4 py-2 text-[12px] font-black text-brand-bg transition-colors hover:brightness-110"
+            >
+              Search
+            </button>
+          </div>
+
+          {searchFocused && homeSearchResults.length > 0 && (
+            <div className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-lg border border-brand-border bg-brand-surface shadow-elevated">
+              {homeSearchResults.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    openSearchItem(item);
+                  }}
+                  className="flex w-full items-center gap-3 border-b border-brand-border px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-brand-surface-light/70"
+                >
+                  <img
+                    src={item.image_url || '/image.png'}
+                    alt=""
+                    className="h-10 w-10 rounded-lg object-cover"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-bold text-white">{item.name}</span>
+                    <span className="block text-xs font-semibold text-brand-gold">₹{item.price}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </form>
+      </section>
 
       {categories.length > 0 && (
         <ScrollReveal>
