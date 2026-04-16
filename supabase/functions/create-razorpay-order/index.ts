@@ -6,6 +6,7 @@ import {
   releaseReviewRewardCoupon,
   reserveReviewRewardCoupon,
 } from "../_shared/review-rewards.ts";
+import { reserveOrderInventory } from "../_shared/inventory.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -316,6 +317,11 @@ Deno.serve(async (req: Request) => {
       }, 409);
     }
 
+    const { error: expireOrdersError } = await adminClient.rpc("expire_stale_pending_orders");
+    if (expireOrdersError) {
+      throw expireOrdersError;
+    }
+
     const unavailableMenuItemNames = await getUnavailableMenuItemNames(adminClient, items);
 
     if (unavailableMenuItemNames.length > 0) {
@@ -404,6 +410,22 @@ Deno.serve(async (req: Request) => {
       }
 
       throw itemsResult.error;
+    }
+
+    const inventoryReservation = await reserveOrderInventory(adminClient, order.id);
+    if (!inventoryReservation.success) {
+      await adminClient
+        .from("orders")
+        .update({
+          payment_status: "failed",
+          status: "expired",
+        })
+        .eq("id", order.id);
+
+      return jsonResponse({
+        success: false,
+        error: inventoryReservation.error || "Some items are out of stock right now",
+      }, 409);
     }
 
     let rewardReserved = false;

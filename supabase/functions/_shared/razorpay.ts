@@ -1,6 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { createHmac } from "node:crypto";
 import { releaseReviewRewardCoupon } from "./review-rewards.ts";
+import { reserveOrderInventory } from "./inventory.ts";
 
 export type AdminClient = ReturnType<typeof createClient>;
 
@@ -38,6 +39,7 @@ export interface OrderRecord {
   payment_verified_at: string | null;
   review_reward_coupon_id: string | null;
   review_reward_discount_amount: number | null;
+  inventory_reserved: boolean | null;
   status: string;
 }
 
@@ -64,6 +66,7 @@ const ORDER_SELECT_FIELDS = `
   payment_verified_at,
   review_reward_coupon_id,
   review_reward_discount_amount,
+  inventory_reserved,
   status
 `;
 
@@ -338,6 +341,30 @@ async function finalizeCapturedPayment(
   }
 
   const paymentMethod = paymentMethodFromRazorpay(payment.method) ?? "card";
+
+  if (order.status === "expired" && !order.inventory_reserved) {
+    const inventoryReservation = await reserveOrderInventory(adminClient, order.id);
+
+    if (!inventoryReservation.success) {
+      console.error("Captured Razorpay payment requires manual review because inventory is no longer available", {
+        appOrderId: order.order_id,
+        razorpayOrderId: order.razorpay_order_id,
+        razorpayPaymentId: payment.id,
+        inventoryError: inventoryReservation.error,
+      });
+
+      return {
+        success: false,
+        appOrderId: order.order_id,
+        paymentState: "failed",
+        orderStatus: order.status,
+        paymentMethod,
+        manualReview: true,
+        error: inventoryReservation.error || "Payment was captured after inventory was released and needs manual review.",
+      };
+    }
+  }
+
   const nextStatus = order.status === "expired" ? "pending" : order.status;
 
   const { data: updatedOrder, error: updateError } = await adminClient

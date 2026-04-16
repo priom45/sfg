@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Pencil, Trash2, Save, X } from 'lucide-react';
 import { useToast } from '../../components/Toast';
 import CustomizationAssignmentsManager from '../../components/admin/CustomizationAssignmentsManager';
+import { detectInventorySchemaSupport } from '../../lib/inventorySchema';
 import { supabase } from '../../lib/supabase';
 import type { Category, MenuItem } from '../../types';
 
@@ -15,7 +16,9 @@ interface ItemForm {
   prep_time: string;
   is_veg: boolean;
   is_eggless: boolean;
-  is_available: boolean;
+  manual_availability: boolean;
+  track_inventory: boolean;
+  available_quantity: string;
 }
 
 interface CategoryForm {
@@ -26,8 +29,17 @@ interface CategoryForm {
 }
 
 const emptyItem: ItemForm = {
-  name: '', description: '', price: '', category_id: '', image_url: '',
-  prep_time: '10', is_veg: false, is_eggless: false, is_available: true,
+  name: '',
+  description: '',
+  price: '',
+  category_id: '',
+  image_url: '',
+  prep_time: '10',
+  is_veg: false,
+  is_eggless: false,
+  manual_availability: true,
+  track_inventory: false,
+  available_quantity: '0',
 };
 
 const emptyCategoryForm: CategoryForm = {
@@ -48,6 +60,73 @@ function normalizeImageUrl(url: string) {
 
 function normalizeItemName(name: string) {
   return name.trim().replace(/\s+/g, ' ');
+}
+
+function getManualAvailability(item: MenuItem) {
+  return item.manual_availability ?? item.is_available;
+}
+
+function getTrackInventory(item: MenuItem) {
+  return item.track_inventory === true;
+}
+
+function getAvailableQuantity(item: MenuItem) {
+  const quantity = Number(item.available_quantity ?? 0);
+  return Number.isFinite(quantity) ? Math.max(0, quantity) : 0;
+}
+
+function computeEffectiveAvailability(manualAvailability: boolean, trackInventory: boolean, availableQuantity: number) {
+  return manualAvailability && (!trackInventory || availableQuantity > 0);
+}
+
+function formatInventorySummary(item: MenuItem) {
+  if (!getTrackInventory(item)) {
+    return 'Inventory not tracked';
+  }
+
+  const quantity = getAvailableQuantity(item);
+  return `${quantity} left`;
+}
+
+function formatVisibilityReason(item: MenuItem) {
+  if (!getManualAvailability(item)) {
+    return 'Hidden manually';
+  }
+
+  if (getTrackInventory(item) && getAvailableQuantity(item) <= 0) {
+    return 'Auto-hidden at zero stock';
+  }
+
+  return 'Visible to customers';
+}
+
+function getStockStatus(item: MenuItem) {
+  if (!getTrackInventory(item)) {
+    return {
+      label: 'Not Tracked',
+      className: 'border-brand-border bg-brand-surface-light/60 text-brand-text-muted',
+    };
+  }
+
+  const quantity = getAvailableQuantity(item);
+  if (quantity <= 0) {
+    return {
+      label: 'Out of Stock',
+      className: 'border-red-500/20 bg-red-500/10 text-red-300',
+    };
+  }
+
+  if (quantity <= 5) {
+    return {
+      label: 'Low Stock',
+      className: 'border-amber-500/20 bg-amber-500/10 text-amber-300',
+    };
+  }
+
+  return {
+    label: 'In Stock',
+    className: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300',
+  };
 }
 
 async function repairMalformedMenuItemImageUrls(items: MenuItem[]) {
@@ -79,23 +158,60 @@ async function repairMalformedMenuItemImageUrls(items: MenuItem[]) {
   };
 }
 
+function toItemForm(item: MenuItem): ItemForm {
+  return {
+    id: item.id,
+    name: normalizeItemName(item.name),
+    description: item.description,
+    price: String(item.price),
+    category_id: item.category_id,
+    image_url: normalizeImageUrl(item.image_url),
+    prep_time: String(item.prep_time),
+    is_veg: item.is_veg,
+    is_eggless: item.is_eggless,
+    manual_availability: getManualAvailability(item),
+    track_inventory: getTrackInventory(item),
+    available_quantity: String(getAvailableQuantity(item)),
+  };
+}
+
 export default function AdminMenu() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [items, setItems] = useState<MenuItem[]>([]);
+  const [inventorySchemaReady, setInventorySchemaReady] = useState(true);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<ItemForm | null>(null);
   const [catForm, setCatForm] = useState<CategoryForm>(emptyCategoryForm);
   const [showCatForm, setShowCatForm] = useState(false);
+  const [stockDrafts, setStockDrafts] = useState<Record<string, string>>({});
+  const [updatingStockId, setUpdatingStockId] = useState<string | null>(null);
   const categoryFormRef = useRef<HTMLDivElement | null>(null);
   const itemFormRef = useRef<HTMLDivElement | null>(null);
+  const schemaNoticeShownRef = useRef(false);
   const { showToast } = useToast();
 
   const loadData = useCallback(async () => {
+    let schemaReady = true;
+    try {
+      schemaReady = await detectInventorySchemaSupport();
+    } catch (error) {
+      console.error('Failed to detect inventory schema support', error);
+    }
+
+    setInventorySchemaReady(schemaReady);
+
+    if (!schemaReady && !schemaNoticeShownRef.current) {
+      showToast('Inventory columns are not in Supabase yet. Apply the latest migration to enable stock counts.', 'error');
+      schemaNoticeShownRef.current = true;
+    }
+
     const [catRes, itemRes] = await Promise.all([
       supabase.from('categories').select('*').order('display_order'),
       supabase.from('menu_items').select('*').order('display_order'),
     ]);
+
     if (catRes.data) setCategories(catRes.data);
+
     if (itemRes.data) {
       const normalizedItems = itemRes.data.map((item) => ({
         ...item,
@@ -110,16 +226,21 @@ export default function AdminMenu() {
         showToast(`Fixed ${repairResult.repairedCount} broken image URL${repairResult.repairedCount > 1 ? 's' : ''}`);
       }
     }
+
     if (catRes.error) {
       showToast(catRes.error.message || 'Failed to load categories', 'error');
     }
+
     if (itemRes.error) {
       showToast(itemRes.error.message || 'Failed to load menu items', 'error');
     }
+
     setLoading(false);
   }, [showToast]);
 
-  useEffect(() => { void loadData(); }, [loadData]);
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   useEffect(() => {
     if (!showCatForm) return;
@@ -136,20 +257,105 @@ export default function AdminMenu() {
       return Number(b.is_available) - Number(a.is_available);
     }
 
+    if (getTrackInventory(a) !== getTrackInventory(b)) {
+      return Number(getTrackInventory(b)) - Number(getTrackInventory(a));
+    }
+
     return a.display_order - b.display_order;
   });
+
+  const trackedItems = sortedItems.filter(getTrackInventory);
+  const untrackedItems = sortedItems.filter((item) => !getTrackInventory(item));
+  const lowStockItems = trackedItems.filter((item) => {
+    const quantity = getAvailableQuantity(item);
+    return quantity > 0 && quantity <= 5;
+  });
+  const outOfStockItems = trackedItems.filter((item) => getAvailableQuantity(item) <= 0);
+  const totalTrackedQuantity = trackedItems.reduce((sum, item) => sum + getAvailableQuantity(item), 0);
+
   const categoryItemCountById = Object.fromEntries(
     categories.map((category) => [
       category.id,
       items.filter((item) => item.category_id === category.id).length,
     ]),
   );
+
   const categoryAvailableItemCountById = Object.fromEntries(
     categories.map((category) => [
       category.id,
       items.filter((item) => item.category_id === category.id && item.is_available).length,
     ]),
   );
+
+  function startNewProduct() {
+    if (categories.length === 0) {
+      showToast('Add a category before creating a menu item', 'error');
+      return;
+    }
+
+    setEditing({ ...emptyItem, category_id: categories[0]?.id || '' });
+  }
+
+  function getStockDraftValue(item: MenuItem) {
+    return stockDrafts[item.id] ?? String(getAvailableQuantity(item));
+  }
+
+  function setStockDraftValue(itemId: string, value: string) {
+    setStockDrafts((current) => ({
+      ...current,
+      [itemId]: value,
+    }));
+  }
+
+  async function updateStockQuantity(item: MenuItem, nextQuantity: number, enableTracking = getTrackInventory(item)) {
+    if (!inventorySchemaReady) {
+      showToast('Run the latest Supabase migration before tracking stock quantities.', 'error');
+      return;
+    }
+
+    if (updatingStockId === item.id) return;
+
+    const availableQuantity = Math.max(0, Math.floor(nextQuantity));
+    const manualAvailability = getManualAvailability(item);
+    const trackInventory = enableTracking || getTrackInventory(item);
+    const nextAvailability = computeEffectiveAvailability(manualAvailability, trackInventory, availableQuantity);
+
+    setUpdatingStockId(item.id);
+
+    const { error } = await supabase
+      .from('menu_items')
+      .update({
+        manual_availability: manualAvailability,
+        track_inventory: trackInventory,
+        available_quantity: availableQuantity,
+        is_available: nextAvailability,
+      })
+      .eq('id', item.id);
+
+    if (error) {
+      showToast(error.message || `Failed to update stock for ${item.name}`, 'error');
+      setUpdatingStockId(null);
+      return;
+    }
+
+    setStockDrafts((current) => {
+      const next = { ...current };
+      delete next[item.id];
+      return next;
+    });
+    showToast(`${item.name} stock updated`);
+    await loadData();
+    setUpdatingStockId(null);
+  }
+
+  async function saveStockDraft(item: MenuItem) {
+    const stockValue = Number.parseInt(getStockDraftValue(item) || '0', 10);
+    await updateStockQuantity(item, Number.isFinite(stockValue) ? stockValue : 0, true);
+  }
+
+  async function adjustStockQuantity(item: MenuItem, delta: number) {
+    await updateStockQuantity(item, getAvailableQuantity(item) + delta, true);
+  }
 
   async function saveItem() {
     if (!editing) return;
@@ -164,20 +370,35 @@ export default function AdminMenu() {
       return;
     }
 
-    const payload = {
+    const availableQuantity = Math.max(0, Number.parseInt(editing.available_quantity || '0', 10) || 0);
+    if (editing.track_inventory && availableQuantity < 0) {
+      showToast('Available quantity cannot be negative', 'error');
+      return;
+    }
+
+    const nextAvailability = computeEffectiveAvailability(editing.manual_availability, editing.track_inventory, availableQuantity);
+    const basePayload = {
       name: normalizeItemName(editing.name),
       description: editing.description,
       price: parseFloat(editing.price) || 0,
       category_id: editing.category_id,
       image_url: normalizeImageUrl(editing.image_url),
-      prep_time: parseInt(editing.prep_time) || 10,
+      prep_time: parseInt(editing.prep_time, 10) || 10,
       is_veg: editing.is_veg,
       is_eggless: editing.is_eggless,
-      is_available: editing.is_available,
+      is_available: inventorySchemaReady ? nextAvailability : editing.manual_availability,
       display_order: editing.id
         ? undefined
         : items.reduce((maxOrder, item) => Math.max(maxOrder, item.display_order), -1) + 1,
     };
+    const payload = inventorySchemaReady
+      ? {
+          ...basePayload,
+          manual_availability: editing.manual_availability,
+          track_inventory: editing.track_inventory,
+          available_quantity: availableQuantity,
+        }
+      : basePayload;
 
     const actionLabel = editing.id ? 'update' : 'add';
     const { error } = editing.id
@@ -189,11 +410,11 @@ export default function AdminMenu() {
       return;
     }
 
-    if (editing.id) {
-      showToast('Item updated');
-    } else {
-      showToast('Item added');
+    if (!inventorySchemaReady) {
+      showToast('Item saved, but stock quantity needs the latest Supabase migration before it can be tracked.');
     }
+
+    showToast(editing.id ? 'Item updated' : 'Item added');
     setEditing(null);
     await loadData();
   }
@@ -203,9 +424,17 @@ export default function AdminMenu() {
     const { error } = await supabase.from('menu_items').delete().eq('id', id);
 
     if (isForeignKeyConstraintError(error)) {
+      const archivePayload = inventorySchemaReady
+        ? {
+            manual_availability: false,
+            is_available: false,
+          }
+        : {
+            is_available: false,
+          };
       const { error: archiveError } = await supabase
         .from('menu_items')
-        .update({ is_available: false })
+        .update(archivePayload)
         .eq('id', id);
 
       if (archiveError) {
@@ -226,26 +455,46 @@ export default function AdminMenu() {
       showToast(error.message || 'Failed to delete item', 'error');
       return;
     }
+
     showToast('Item deleted');
     await loadData();
   }
 
-  async function toggleItemAvailability(item: MenuItem, nextAvailability: boolean) {
+  async function toggleItemAvailability(item: MenuItem, nextManualAvailability: boolean) {
+    const availableQuantity = getAvailableQuantity(item);
+    const trackInventory = getTrackInventory(item);
+    const nextEffectiveAvailability = computeEffectiveAvailability(nextManualAvailability, trackInventory, availableQuantity);
+    const updatePayload = inventorySchemaReady
+      ? {
+          manual_availability: nextManualAvailability,
+          is_available: nextEffectiveAvailability,
+        }
+      : {
+          is_available: nextManualAvailability,
+        };
+
     const { error } = await supabase
       .from('menu_items')
-      .update({ is_available: nextAvailability })
+      .update(updatePayload)
       .eq('id', item.id);
 
     if (error) {
-      showToast(error.message || `Failed to mark ${item.name} as ${nextAvailability ? 'in stock' : 'out of stock'}`, 'error');
+      showToast(error.message || `Failed to update ${item.name}`, 'error');
       return;
     }
 
-    showToast(nextAvailability ? `${item.name} is now in stock` : `${item.name} marked out of stock`);
+    if (!nextManualAvailability) {
+      showToast(`${item.name} hidden from customers`);
+    } else if (trackInventory && availableQuantity <= 0) {
+      showToast(`${item.name} will become visible after stock is added`);
+    } else {
+      showToast(`${item.name} is now visible to customers`);
+    }
+
     await loadData();
   }
 
-  async function toggleCategoryAvailability(category: Category, nextAvailability: boolean) {
+  async function toggleCategoryAvailability(category: Category, nextManualAvailability: boolean) {
     const categoryItemCount = categoryItemCountById[category.id] || 0;
 
     if (categoryItemCount === 0) {
@@ -253,23 +502,28 @@ export default function AdminMenu() {
       return;
     }
 
-    const { error } = await supabase
-      .from('menu_items')
-      .update({ is_available: nextAvailability })
-      .eq('category_id', category.id);
+    const { error } = inventorySchemaReady
+      ? await supabase
+          .from('menu_items')
+          .update({ manual_availability: nextManualAvailability })
+          .eq('category_id', category.id)
+      : await supabase
+          .from('menu_items')
+          .update({ is_available: nextManualAvailability })
+          .eq('category_id', category.id);
 
     if (error) {
       showToast(
-        error.message || `Failed to mark ${category.name} as ${nextAvailability ? 'in stock' : 'out of stock'}`,
+        error.message || `Failed to update ${category.name}`,
         'error',
       );
       return;
     }
 
     showToast(
-      nextAvailability
-        ? `${category.name} is now in stock`
-        : `${category.name} marked out of stock`,
+      nextManualAvailability
+        ? `${category.name} items will show when stock is available`
+        : `${category.name} hidden from customers`,
     );
     await loadData();
   }
@@ -279,12 +533,14 @@ export default function AdminMenu() {
       showToast('Category name is required', 'error');
       return;
     }
+
     const slug = catForm.slug || catForm.name.toLowerCase().replace(/\s+/g, '-');
     const payload = {
       name: catForm.name.trim(),
       slug,
       image_url: normalizeImageUrl(catForm.image_url),
     };
+
     const { error } = catForm.id
       ? await supabase.from('categories').update(payload).eq('id', catForm.id)
       : await supabase.from('categories').insert({
@@ -334,17 +590,167 @@ export default function AdminMenu() {
       showToast(error.message || 'Failed to delete category', 'error');
       return;
     }
+
     showToast('Category deleted');
     await loadData();
   }
 
   if (loading) {
-    return <div className="animate-pulse"><div className="h-8 bg-brand-surface rounded w-32 mb-4" /><div className="h-40 bg-brand-surface rounded-xl" /></div>;
+    return (
+      <div className="animate-pulse">
+        <div className="h-8 bg-brand-surface rounded w-32 mb-4" />
+        <div className="h-40 bg-brand-surface rounded-xl" />
+      </div>
+    );
   }
 
   return (
     <div>
-      <h1 className="text-2xl font-extrabold text-white mb-6">Menu Management</h1>
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-extrabold text-white">Product Management</h1>
+          <p className="mt-1 text-sm text-brand-text-muted">Add products, track stock, and control customer visibility.</p>
+        </div>
+        <button
+          onClick={startNewProduct}
+          className="btn-primary inline-flex items-center justify-center gap-1 px-4 py-2 text-sm"
+        >
+          <Plus size={16} /> Add Product
+        </button>
+      </div>
+
+      <div className="mb-8 rounded-xl border border-brand-border bg-brand-surface p-4">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-white">Stock Tracking</h2>
+            <p className="mt-1 text-sm text-brand-text-muted">
+              Track item quantities here. Products with zero tracked stock are hidden from customers automatically.
+            </p>
+          </div>
+          {!inventorySchemaReady && (
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200">
+              Run the inventory migration to enable stock controls.
+            </div>
+          )}
+        </div>
+
+        <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[
+            { label: 'Products', value: items.length, className: 'border-sky-500/20 bg-sky-500/10 text-sky-300' },
+            { label: 'Tracked', value: trackedItems.length, className: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' },
+            { label: 'Low Stock', value: lowStockItems.length, className: 'border-amber-500/20 bg-amber-500/10 text-amber-300' },
+            { label: 'Out', value: outOfStockItems.length, className: 'border-red-500/20 bg-red-500/10 text-red-300' },
+          ].map((stat) => (
+            <div key={stat.label} className={`rounded-lg border px-3 py-3 ${stat.className}`}>
+              <p className="text-2xl font-black tabular-nums">{stat.value}</p>
+              <p className="text-[10px] font-bold uppercase tracking-wider opacity-75">{stat.label}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mb-4 rounded-lg border border-brand-border bg-brand-bg/40 px-3 py-2 text-sm text-brand-text-muted">
+          Total tracked stock: <span className="font-bold text-white">{totalTrackedQuantity}</span> item{totalTrackedQuantity === 1 ? '' : 's'}
+        </div>
+
+        {trackedItems.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-brand-border bg-brand-bg/30 px-4 py-6 text-center">
+            <p className="text-sm font-semibold text-white">No products are tracking stock yet.</p>
+            <p className="mt-1 text-xs text-brand-text-dim">Add a product or edit an existing one, then enable stock quantity tracking.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {trackedItems.map((item) => {
+              const stockStatus = getStockStatus(item);
+              const stockDraft = getStockDraftValue(item);
+              const isUpdatingStock = updatingStockId === item.id;
+
+              return (
+                <div key={item.id} className="rounded-lg border border-brand-border bg-brand-bg/40 p-3">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-sm font-bold text-white">{item.name}</p>
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${stockStatus.className}`}>
+                          {stockStatus.label}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-brand-text-dim">
+                        ₹{item.price} &bull; {getAvailableQuantity(item)} available
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => void adjustStockQuantity(item, -1)}
+                        disabled={isUpdatingStock || !inventorySchemaReady || getAvailableQuantity(item) <= 0}
+                        className="h-9 w-9 rounded-lg border border-brand-border text-sm font-black text-brand-text-muted transition-colors hover:border-brand-gold/40 hover:text-brand-gold disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        -
+                      </button>
+                      <input
+                        type="number"
+                        min="0"
+                        value={stockDraft}
+                        onChange={(event) => setStockDraftValue(item.id, event.target.value)}
+                        disabled={!inventorySchemaReady}
+                        className="h-9 w-24 rounded-lg border border-brand-border bg-brand-surface px-3 text-center text-sm font-bold text-white outline-none transition-colors focus:border-brand-gold disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <button
+                        onClick={() => void adjustStockQuantity(item, 1)}
+                        disabled={isUpdatingStock || !inventorySchemaReady}
+                        className="h-9 w-9 rounded-lg border border-brand-border text-sm font-black text-brand-text-muted transition-colors hover:border-brand-gold/40 hover:text-brand-gold disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        +
+                      </button>
+                      <button
+                        onClick={() => void saveStockDraft(item)}
+                        disabled={isUpdatingStock || !inventorySchemaReady}
+                        className="rounded-lg bg-brand-gold px-3 py-2 text-xs font-bold text-brand-bg transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {isUpdatingStock ? 'Saving...' : 'Save Stock'}
+                      </button>
+                      <button
+                        onClick={() => setEditing(toItemForm(item))}
+                        className="rounded-lg border border-brand-border px-3 py-2 text-xs font-bold text-brand-text-muted transition-colors hover:border-brand-gold/40 hover:text-brand-gold"
+                      >
+                        Edit Product
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {untrackedItems.length > 0 && inventorySchemaReady && (
+          <div className="mt-5">
+            <h3 className="mb-2 text-sm font-bold text-white">Not Tracking Stock</h3>
+            <div className="grid gap-2 md:grid-cols-2">
+              {untrackedItems.slice(0, 6).map((item) => (
+                <div key={item.id} className="flex items-center justify-between gap-3 rounded-lg border border-brand-border bg-brand-bg/30 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-white">{item.name}</p>
+                    <p className="text-xs text-brand-text-dim">Manual visibility only</p>
+                  </div>
+                  <button
+                    onClick={() => void updateStockQuantity(item, getAvailableQuantity(item), true)}
+                    disabled={updatingStockId === item.id}
+                    className="shrink-0 rounded-lg border border-brand-gold/30 px-3 py-1.5 text-xs font-bold text-brand-gold transition-colors hover:bg-brand-gold hover:text-brand-bg disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Track
+                  </button>
+                </div>
+              ))}
+            </div>
+            {untrackedItems.length > 6 && (
+              <p className="mt-2 text-xs text-brand-text-dim">
+                {untrackedItems.length - 6} more product{untrackedItems.length - 6 === 1 ? '' : 's'} can be enabled from Edit Product.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
 
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
@@ -385,7 +791,7 @@ export default function AdminMenu() {
             const totalItems = categoryItemCountById[cat.id] || 0;
             const availableItems = categoryAvailableItemCountById[cat.id] || 0;
             const hasItems = totalItems > 0;
-            const shouldMarkIn = hasItems && availableItems === 0;
+            const shouldMarkVisible = hasItems && availableItems === 0;
 
             return (
               <div key={cat.id} className="rounded-xl border border-brand-border bg-brand-surface p-3">
@@ -394,7 +800,7 @@ export default function AdminMenu() {
                     <p className="truncate text-sm font-bold text-white">{cat.name}</p>
                     <p className="mt-1 text-xs text-brand-text-muted">
                       {hasItems
-                        ? `${availableItems}/${totalItems} item${totalItems === 1 ? '' : 's'} in stock`
+                        ? `${availableItems}/${totalItems} item${totalItems === 1 ? '' : 's'} visible`
                         : 'No items in this category'}
                     </p>
                   </div>
@@ -415,17 +821,17 @@ export default function AdminMenu() {
                     {hasItems && availableItems > 0 ? 'Visible To Customers' : 'Hidden From Customers'}
                   </span>
                   <button
-                    onClick={() => void toggleCategoryAvailability(cat, shouldMarkIn)}
+                    onClick={() => void toggleCategoryAvailability(cat, shouldMarkVisible)}
                     disabled={!hasItems}
                     className={`rounded-lg px-3 py-1.5 text-[11px] font-bold transition-colors ${
                       !hasItems
                         ? 'cursor-not-allowed bg-brand-surface-light/40 text-brand-text-dim'
-                        : shouldMarkIn
+                        : shouldMarkVisible
                           ? 'text-emerald-300 hover:bg-emerald-500/10'
                           : 'text-red-300 hover:bg-red-500/10'
                     }`}
                   >
-                    {shouldMarkIn ? 'Mark All In' : 'Mark All Out'}
+                    {shouldMarkVisible ? 'Show All' : 'Hide All'}
                   </button>
                 </div>
               </div>
@@ -438,21 +844,22 @@ export default function AdminMenu() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold text-white">Menu Items</h2>
           <button
-            onClick={() => {
-              if (categories.length === 0) {
-                showToast('Add a category before creating a menu item', 'error');
-                return;
-              }
-              setEditing({ ...emptyItem, category_id: categories[0]?.id || '' });
-            }}
+            onClick={startNewProduct}
             className="flex items-center gap-1 text-sm text-brand-gold font-semibold"
           >
-            <Plus size={16} /> Add Item
+            <Plus size={16} /> Add Product
           </button>
         </div>
 
         {editing && (
           <div ref={itemFormRef} className="bg-brand-surface rounded-xl border border-brand-border p-4 mb-4 space-y-3">
+            {!inventorySchemaReady && (
+              <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+                Stock quantity tracking is not enabled on this Supabase project yet.
+                Run the latest migration, then refresh this page.
+              </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <input placeholder="Item Name" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} className="input-field" />
               <select value={editing.category_id} onChange={(e) => setEditing({ ...editing, category_id: e.target.value })} className="input-field">
@@ -461,22 +868,77 @@ export default function AdminMenu() {
               <input placeholder="Price" type="number" value={editing.price} onChange={(e) => setEditing({ ...editing, price: e.target.value })} className="input-field" />
               <input placeholder="Prep Time (min)" type="number" value={editing.prep_time} onChange={(e) => setEditing({ ...editing, prep_time: e.target.value })} className="input-field" />
             </div>
+
             <input placeholder="Image URL" value={editing.image_url} onChange={(e) => setEditing({ ...editing, image_url: e.target.value })} className="input-field" />
             <textarea placeholder="Description" value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} className="input-field resize-none" rows={2} />
+
             <label className="flex items-center gap-3 rounded-xl border border-brand-border bg-brand-surface-light/40 px-4 py-3 text-sm text-white">
               <input
                 type="checkbox"
-                checked={editing.is_available}
-                onChange={(e) => setEditing({ ...editing, is_available: e.target.checked })}
+                checked={editing.manual_availability}
+                onChange={(e) => setEditing({ ...editing, manual_availability: e.target.checked })}
                 className="h-4 w-4 accent-brand-gold"
               />
               <span>
-                {editing.is_available ? 'In stock and visible to customers' : 'Out of stock and hidden from customers'}
+                {editing.manual_availability ? 'Show item to customers when stock is available' : 'Hide item from customers'}
               </span>
             </label>
+
+            <div className="rounded-xl border border-brand-border bg-brand-surface-light/40 p-4 space-y-3">
+              <label className="flex items-center gap-3 text-sm text-white">
+                <input
+                  type="checkbox"
+                  checked={editing.track_inventory}
+                  onChange={(e) => setEditing({
+                    ...editing,
+                    track_inventory: e.target.checked,
+                    available_quantity: e.target.checked ? editing.available_quantity : editing.available_quantity || '0',
+                  })}
+                  disabled={!inventorySchemaReady}
+                  className="h-4 w-4 accent-brand-gold"
+                />
+                <span>Track stock quantity for this item</span>
+              </label>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs uppercase tracking-[0.18em] text-brand-text-dim mb-2">
+                    Available Quantity
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editing.available_quantity}
+                    onChange={(e) => setEditing({ ...editing, available_quantity: e.target.value })}
+                    disabled={!editing.track_inventory}
+                    className="input-field disabled:cursor-not-allowed disabled:opacity-60"
+                  />
+                </div>
+                <div className="rounded-xl border border-brand-border bg-brand-bg/60 px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.18em] text-brand-text-dim">Result</p>
+                  <p className="mt-2 text-sm font-semibold text-white">
+                    {computeEffectiveAvailability(
+                      editing.manual_availability,
+                      editing.track_inventory,
+                      Math.max(0, Number.parseInt(editing.available_quantity || '0', 10) || 0),
+                    )
+                      ? 'Customers can order this item'
+                      : 'Customers will see this item as out of stock'}
+                  </p>
+                  <p className="mt-1 text-xs text-brand-text-muted">
+                    When quantity reaches 0, the item hides automatically.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-sm text-brand-text-muted">
+              Stock counts are only for admin use. Customers only see whether the item is available or out of stock.
+            </p>
             <p className="text-sm text-brand-text-muted">
               Add-ons are assigned from the Add-On Management section below.
             </p>
+
             <div className="flex gap-2">
               <button onClick={saveItem} className="btn-primary text-sm px-4 py-2 flex items-center gap-1"><Save size={14} />{editing.id ? 'Update' : 'Add'}</button>
               <button onClick={() => setEditing(null)} className="btn-outline text-sm px-4 py-2 flex items-center gap-1"><X size={14} />Cancel</button>
@@ -489,62 +951,86 @@ export default function AdminMenu() {
             No menu items to show
           </div>
         ) : (
-        <div className="space-y-2">
-          {sortedItems.map((item) => (
-            <div key={item.id} className="bg-brand-surface rounded-xl border border-brand-border p-3 flex items-center gap-4">
-              <img
-                src={item.image_url || '/image.png'}
-                alt={item.name}
-                onError={(event) => {
-                  if (event.currentTarget.src.endsWith('/image.png')) return;
-                  event.currentTarget.src = '/image.png';
-                }}
-                className="w-14 h-14 rounded-lg object-cover flex-shrink-0"
-              />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <h3 className="font-bold text-sm truncate text-white">{item.name}</h3>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
-                      item.is_available
-                        ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
-                        : 'bg-red-500/10 text-red-300 border border-red-500/20'
-                    }`}
-                  >
-                    {item.is_available ? 'In Stock' : 'Out of Stock'}
-                  </span>
+          <div className="space-y-2">
+            {sortedItems.map((item) => {
+              const manualAvailability = getManualAvailability(item);
+              const trackInventory = getTrackInventory(item);
+              const availableQuantity = getAvailableQuantity(item);
+
+              return (
+                <div key={item.id} className="bg-brand-surface rounded-xl border border-brand-border p-3 flex items-center gap-4">
+                  <img
+                    src={item.image_url || '/image.png'}
+                    alt={item.name}
+                    onError={(event) => {
+                      if (event.currentTarget.src.endsWith('/image.png')) return;
+                      event.currentTarget.src = '/image.png';
+                    }}
+                    className="w-14 h-14 rounded-lg object-cover flex-shrink-0"
+                  />
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-bold text-sm truncate text-white">{item.name}</h3>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                          item.is_available
+                            ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
+                            : 'bg-red-500/10 text-red-300 border border-red-500/20'
+                        }`}
+                      >
+                        {item.is_available ? 'In Stock' : 'Out of Stock'}
+                      </span>
+                      {trackInventory && (
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                            availableQuantity > 5
+                              ? 'bg-sky-500/10 text-sky-300 border border-sky-500/20'
+                              : availableQuantity > 0
+                                ? 'bg-amber-500/10 text-amber-300 border border-amber-500/20'
+                                : 'bg-red-500/10 text-red-300 border border-red-500/20'
+                          }`}
+                        >
+                          {formatInventorySummary(item)}
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="text-xs text-brand-text-muted">
+                      ₹{item.price} &bull; {item.prep_time} min
+                    </p>
+                    <p className="text-xs text-brand-text-dim mt-1">
+                      {formatVisibilityReason(item)}
+                      {trackInventory ? ` • Stock tracked` : ' • Unlimited / manually controlled'}
+                      {!manualAvailability && trackInventory ? ` • ${availableQuantity} kept in admin stock` : ''}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => void toggleItemAvailability(item, !manualAvailability)}
+                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${
+                        manualAvailability
+                          ? 'text-red-300 hover:bg-red-500/10'
+                          : 'text-emerald-300 hover:bg-emerald-500/10'
+                      }`}
+                    >
+                      {manualAvailability ? 'Hide' : 'Show'}
+                    </button>
+                    <button
+                      onClick={() => setEditing(toItemForm(item))}
+                      className="p-2 hover:bg-brand-surface-light/70 rounded-lg text-brand-text-dim hover:text-white transition-colors"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button onClick={() => deleteItem(item.id)} className="p-2 hover:bg-red-500/10 rounded-lg text-brand-text-dim hover:text-red-400 transition-colors">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
-                <p className="text-xs text-brand-text-muted">₹{item.price} &bull; {item.prep_time} min</p>
-              </div>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => void toggleItemAvailability(item, !item.is_available)}
-                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${
-                    item.is_available
-                      ? 'text-red-300 hover:bg-red-500/10'
-                      : 'text-emerald-300 hover:bg-emerald-500/10'
-                  }`}
-                >
-                  {item.is_available ? 'Mark Out' : 'Mark In'}
-                </button>
-                <button
-                  onClick={() => setEditing({
-                    id: item.id, name: normalizeItemName(item.name), description: item.description,
-                    price: String(item.price), category_id: item.category_id,
-                    image_url: normalizeImageUrl(item.image_url), prep_time: String(item.prep_time),
-                    is_veg: item.is_veg, is_eggless: item.is_eggless, is_available: item.is_available,
-                  })}
-                  className="p-2 hover:bg-brand-surface-light/70 rounded-lg text-brand-text-dim hover:text-white transition-colors"
-                >
-                  <Pencil size={14} />
-                </button>
-                <button onClick={() => deleteItem(item.id)} className="p-2 hover:bg-red-500/10 rounded-lg text-brand-text-dim hover:text-red-400 transition-colors">
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
+              );
+            })}
+          </div>
         )}
       </div>
 

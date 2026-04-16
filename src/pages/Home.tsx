@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ChevronRight, ChevronLeft, Clock, Sparkles, Flame } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import OfferCarousel from '../components/OfferCarousel';
+import { expireStalePendingOrders } from '../lib/inventorySchema';
 import { supabase } from '../lib/supabase';
 import { sortCategoriesForMenu } from '../lib/categoryOrdering';
 import { fetchMenuPopularity, type MenuPopularityContext } from '../lib/menuPopularity';
@@ -39,6 +40,12 @@ export default function Home() {
   const { showToast } = useToast();
 
   const loadData = useCallback(async () => {
+    try {
+      await expireStalePendingOrders();
+    } catch (error) {
+      console.error('Failed to expire stale pending orders', error);
+    }
+
     const [catRes, allRes, offerRes, availability] = await Promise.all([
       supabase.from('categories').select('*').order('display_order'),
       supabase.from('menu_items').select('*').eq('is_available', true).order('display_order'),

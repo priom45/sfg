@@ -2,8 +2,9 @@ import {
   FunctionsFetchError,
   FunctionsHttpError,
   FunctionsRelayError,
+  type Session,
 } from '@supabase/supabase-js';
-import { supabase } from './supabase';
+import { staffSupabase } from './supabase';
 import type { CounterPaymentMethod } from '../types';
 
 interface MarkOrderPaidResponse {
@@ -16,6 +17,7 @@ interface MarkOrderPaidResponse {
 interface MarkOrderPaidOptions {
   counterPaymentMethod?: CounterPaymentMethod;
   cashReceivedAmount?: number;
+  onlineReceivedAmount?: number;
 }
 
 interface MarkedOrderPaid {
@@ -24,11 +26,47 @@ interface MarkedOrderPaid {
   receiptEmailSent?: boolean;
 }
 
-async function ensureFreshPaidStatusSession() {
-  const { data: sessionData } = await supabase.auth.getSession();
+type DirectPaymentOrder = {
+  id: string;
+  order_id: string;
+  total: number | string | null;
+  payment_status: string | null;
+  payment_provider: string | null;
+  payment_method: string | null;
+  counter_payment_method: CounterPaymentMethod | null;
+  cash_received_amount: number | string | null;
+  online_received_amount: number | string | null;
+  paid_amount: number | string | null;
+};
 
-  if (!sessionData.session) {
-    const { data: refreshedData, error: refreshError } = await supabase.auth.refreshSession();
+type PaymentUpdatePayload = {
+  payment_status: 'paid';
+  payment_verified_at: string;
+  paid_amount: number;
+  payment_method?: 'cod' | 'upi';
+  payment_provider?: null;
+  counter_payment_method?: CounterPaymentMethod;
+  cash_received_amount?: number | null;
+  online_received_amount?: number | null;
+};
+
+function roundCurrency(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function getCounterPaymentMethod(value: CounterPaymentMethod | undefined, fallbackMethod: string | null) {
+  if (value === 'cash' || value === 'online' || value === 'split') {
+    return value;
+  }
+
+  return fallbackMethod === 'upi' ? 'online' : 'cash';
+}
+
+async function ensureFreshPaidStatusSession(forceRefresh = false) {
+  const { data: sessionData } = await staffSupabase.auth.getSession();
+
+  if (forceRefresh || !sessionData.session) {
+    const { data: refreshedData, error: refreshError } = await staffSupabase.auth.refreshSession();
     if (refreshError || !refreshedData.session) {
       throw new Error('Please sign in again to update this payment.');
     }
@@ -37,7 +75,7 @@ async function ensureFreshPaidStatusSession() {
 
   const expiresAtMs = sessionData.session.expires_at ? sessionData.session.expires_at * 1000 : 0;
   if (expiresAtMs && expiresAtMs - Date.now() < 60_000) {
-    const { data: refreshedData, error: refreshError } = await supabase.auth.refreshSession();
+    const { data: refreshedData, error: refreshError } = await staffSupabase.auth.refreshSession();
     if (refreshError || !refreshedData.session) {
       throw new Error('Please sign in again to update this payment.');
     }
@@ -52,10 +90,6 @@ async function toMarkPaidFunctionError(error: unknown) {
     const response = error.context;
 
     if (response instanceof Response) {
-      if (response.status === 401) {
-        return new Error('Payment update request was rejected because the session is no longer valid.');
-      }
-
       try {
         const payload = await response.clone().json() as { error?: string; message?: string };
         if (typeof payload.error === 'string' && payload.error.trim()) {
@@ -74,6 +108,10 @@ async function toMarkPaidFunctionError(error: unknown) {
           // Ignore parsing failures and use the fallback below.
         }
       }
+
+      if (response.status === 401) {
+        return new Error('Payment update request was rejected. Please sign out and sign in again.');
+      }
     }
 
     return new Error('Payment update service returned an unexpected response.');
@@ -90,55 +128,154 @@ async function toMarkPaidFunctionError(error: unknown) {
   return error instanceof Error ? error : new Error('Failed to update payment');
 }
 
-export async function markOrderPaid(orderId: string, options: MarkOrderPaidOptions = {}) {
-  let session = await ensureFreshPaidStatusSession();
+function isUnauthorizedFunctionError(error: unknown) {
+  return error instanceof FunctionsHttpError &&
+    error.context instanceof Response &&
+    error.context.status === 401;
+}
 
-  const { data, error } = await supabase.functions.invoke<MarkOrderPaidResponse>(
+async function invokeMarkPaidFunction(
+  session: Session,
+  orderId: string,
+  options: MarkOrderPaidOptions,
+) {
+  return staffSupabase.functions.invoke<MarkOrderPaidResponse>(
     'mark-order-paid',
     {
       body: {
         orderId,
         counterPaymentMethod: options.counterPaymentMethod,
         cashReceivedAmount: options.cashReceivedAmount,
+        onlineReceivedAmount: options.onlineReceivedAmount,
       },
       headers: {
         Authorization: `Bearer ${session.access_token}`,
       },
     },
   );
+}
 
-  if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401) {
-    session = await ensureFreshPaidStatusSession();
-    const retry = await supabase.functions.invoke<MarkOrderPaidResponse>(
-      'mark-order-paid',
-      {
-        body: {
-          orderId,
-          counterPaymentMethod: options.counterPaymentMethod,
-          cashReceivedAmount: options.cashReceivedAmount,
-        },
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      },
-    );
-    if (retry.error) {
-      throw await toMarkPaidFunctionError(retry.error);
-    }
-    if (!retry.data?.success || !retry.data.appOrderId) {
-      throw new Error(retry.data?.error || 'Failed to update payment');
-    }
-    return {
-      success: true,
-      appOrderId: retry.data.appOrderId,
-      receiptEmailSent: retry.data.receiptEmailSent,
-    } satisfies MarkedOrderPaid;
+async function markOrderPaidDirectly(
+  orderId: string,
+  options: MarkOrderPaidOptions,
+): Promise<MarkedOrderPaid> {
+  const { data: order, error: orderError } = await staffSupabase
+    .from('orders')
+    .select(
+      'id, order_id, total, payment_status, payment_provider, payment_method, counter_payment_method, cash_received_amount, online_received_amount, paid_amount',
+    )
+    .eq('order_id', orderId)
+    .maybeSingle<DirectPaymentOrder>();
+
+  if (orderError || !order) {
+    throw new Error(orderError?.message || 'Order not found');
   }
 
-  if (error) {
-    throw await toMarkPaidFunctionError(error);
+  const orderTotal = roundCurrency(Number(order.total ?? 0));
+  const existingPaidAmount = order.payment_status === 'paid'
+    ? orderTotal
+    : roundCurrency(Number(order.paid_amount ?? 0));
+  const amountDue = Math.max(0, roundCurrency(orderTotal - existingPaidAmount));
+  const selectedCounterPaymentMethod = getCounterPaymentMethod(
+    options.counterPaymentMethod,
+    order.payment_method,
+  );
+  const rawCashAmount = Number(
+    options.cashReceivedAmount ?? (selectedCounterPaymentMethod === 'cash' ? amountDue : 0),
+  );
+  const rawOnlineAmount = Number(
+    options.onlineReceivedAmount ?? (selectedCounterPaymentMethod === 'online' ? amountDue : 0),
+  );
+  const cashAmount = roundCurrency(rawCashAmount);
+  const onlineAmount = roundCurrency(rawOnlineAmount);
+
+  if (
+    order.payment_provider !== 'razorpay' &&
+    selectedCounterPaymentMethod === 'cash' &&
+    amountDue > 0 &&
+    (!Number.isFinite(cashAmount) || cashAmount < amountDue)
+  ) {
+    throw new Error(`Cash received must be at least ₹${amountDue.toFixed(2)}`);
   }
 
+  if (
+    order.payment_provider !== 'razorpay' &&
+    selectedCounterPaymentMethod === 'split' &&
+    amountDue > 0
+  ) {
+    if (!Number.isFinite(cashAmount) || cashAmount <= 0) {
+      throw new Error('Enter the cash amount for this split payment');
+    }
+
+    if (!Number.isFinite(onlineAmount) || onlineAmount <= 0) {
+      throw new Error('Enter the UPI amount for this split payment');
+    }
+
+    if (roundCurrency(cashAmount + onlineAmount) < amountDue) {
+      throw new Error(`Cash + UPI must cover ₹${amountDue.toFixed(2)}`);
+    }
+  }
+
+  if (
+    order.payment_provider !== 'razorpay' &&
+    selectedCounterPaymentMethod === 'online' &&
+    amountDue > 0 &&
+    (!Number.isFinite(onlineAmount) || onlineAmount < amountDue)
+  ) {
+    throw new Error(`UPI received must be at least ₹${amountDue.toFixed(2)}`);
+  }
+
+  if (order.payment_status !== 'paid') {
+    const paymentUpdate: PaymentUpdatePayload = {
+      payment_status: 'paid',
+      payment_verified_at: new Date().toISOString(),
+      paid_amount: orderTotal,
+    };
+
+    if (order.payment_provider !== 'razorpay') {
+      const existingCashAmount = roundCurrency(Number(order.cash_received_amount ?? 0));
+      const existingOnlineAmount = roundCurrency(Number(order.online_received_amount ?? 0));
+      const cashDelta = selectedCounterPaymentMethod === 'cash' || selectedCounterPaymentMethod === 'split'
+        ? cashAmount
+        : 0;
+      const onlineDelta = selectedCounterPaymentMethod === 'online'
+        ? amountDue
+        : selectedCounterPaymentMethod === 'split'
+          ? onlineAmount
+          : 0;
+      const nextCashAmount = roundCurrency(existingCashAmount + cashDelta);
+      const nextOnlineAmount = roundCurrency(existingOnlineAmount + onlineDelta);
+      const resolvedCounterPaymentMethod = nextCashAmount > 0 && nextOnlineAmount > 0
+        ? 'split'
+        : nextOnlineAmount > 0
+          ? 'online'
+          : 'cash';
+
+      paymentUpdate.payment_method = resolvedCounterPaymentMethod === 'cash' ? 'cod' : 'upi';
+      paymentUpdate.payment_provider = null;
+      paymentUpdate.counter_payment_method = resolvedCounterPaymentMethod;
+      paymentUpdate.cash_received_amount = nextCashAmount > 0 ? nextCashAmount : null;
+      paymentUpdate.online_received_amount = nextOnlineAmount > 0 ? nextOnlineAmount : null;
+    }
+
+    const { error: updateError } = await staffSupabase
+      .from('orders')
+      .update(paymentUpdate)
+      .eq('id', order.id);
+
+    if (updateError) {
+      throw new Error(updateError.message || 'Failed to update payment');
+    }
+  }
+
+  return {
+    success: true,
+    appOrderId: order.order_id,
+    receiptEmailSent: false,
+  };
+}
+
+function toMarkedOrderPaid(data: MarkOrderPaidResponse | null): MarkedOrderPaid {
   if (!data?.success || !data.appOrderId) {
     throw new Error(data?.error || 'Failed to update payment');
   }
@@ -147,5 +284,40 @@ export async function markOrderPaid(orderId: string, options: MarkOrderPaidOptio
     success: true,
     appOrderId: data.appOrderId,
     receiptEmailSent: data.receiptEmailSent,
-  } satisfies MarkedOrderPaid;
+  };
+}
+
+export async function markOrderPaid(orderId: string, options: MarkOrderPaidOptions = {}) {
+  let session = await ensureFreshPaidStatusSession();
+
+  const { data, error } = await invokeMarkPaidFunction(session, orderId, options);
+
+  if (isUnauthorizedFunctionError(error)) {
+    try {
+      session = await ensureFreshPaidStatusSession(true);
+      const retry = await invokeMarkPaidFunction(session, orderId, options);
+
+      if (retry.error) {
+        if (isUnauthorizedFunctionError(retry.error)) {
+          return markOrderPaidDirectly(orderId, options);
+        }
+
+        throw await toMarkPaidFunctionError(retry.error);
+      }
+
+      return toMarkedOrderPaid(retry.data);
+    } catch (refreshOrRetryError) {
+      if (refreshOrRetryError instanceof Error && refreshOrRetryError.message.includes('sign in again')) {
+        throw refreshOrRetryError;
+      }
+
+      return markOrderPaidDirectly(orderId, options);
+    }
+  }
+
+  if (error) {
+    throw await toMarkPaidFunctionError(error);
+  }
+
+  return toMarkedOrderPaid(data);
 }

@@ -322,7 +322,7 @@ function PastOrderCard({
   reviewsByOrderItemId: Record<string, ItemReview>;
   rewardCouponsByReviewId: Record<string, ReviewRewardCoupon>;
   onReviewSubmitted: (result: ReviewSubmissionResult) => void;
-  showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
+  showToast: (message: string, type?: 'success' | 'error') => void;
 }) {
   const [showReviews, setShowReviews] = useState(false);
   const config = statusConfig[order.status] || statusConfig.pending;
@@ -407,7 +407,7 @@ function OrderItemReviewCard({
   existingReview: ItemReview | null;
   rewardCoupon: ReviewRewardCoupon | null;
   onReviewSubmitted: (result: ReviewSubmissionResult) => void;
-  showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
+  showToast: (message: string, type?: 'success' | 'error') => void;
 }) {
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');

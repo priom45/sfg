@@ -1,9 +1,10 @@
-import type { OrderType, PickupOption, PaymentMethod, PaymentProvider } from '../types';
+import type { CounterPaymentMethod, OrderType, PickupOption, PaymentMethod, PaymentProvider } from '../types';
 
 type PaymentStateContext = {
   payment_method?: PaymentMethod;
   payment_provider?: PaymentProvider;
   payment_status?: string | null;
+  counter_payment_method?: CounterPaymentMethod | null;
   total?: number | null;
 };
 
@@ -60,6 +61,12 @@ export function getPaymentMethodLabel(order: OrderModeContext) {
 
   if (order.payment_provider === 'razorpay') {
     return order.payment_method === 'upi' ? 'Online UPI' : 'Online Payment';
+  }
+
+  if (order.payment_status === 'paid') {
+    if (order.counter_payment_method === 'split') return 'Cash + UPI';
+    if (order.counter_payment_method === 'online') return 'UPI at Counter';
+    if (order.counter_payment_method === 'cash') return order.order_type === 'pickup' ? 'Cash at Counter' : 'Cash on Delivery';
   }
 
   if (order.payment_method === 'upi') {

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { ShoppingBag, DollarSign, Clock, TrendingUp, CalendarDays, Wallet, Landmark } from 'lucide-react';
 import { useToast } from '../../components/Toast';
+import { expireStalePendingOrders } from '../../lib/inventorySchema';
 import { supabase } from '../../lib/supabase';
 import { isAwaitingCounterPayment, isAwaitingOnlinePayment } from '../../lib/orderLabels';
 import type { Order } from '../../types';
@@ -79,12 +80,16 @@ function isCollectedOrder(order: Order) {
   return isRevenueOrder(order) && order.payment_status === 'paid';
 }
 
-function getPaymentChannel(order: Order): 'cash' | 'online' | null {
+function getPaymentChannel(order: Order): 'cash' | 'online' | 'split' | null {
   if (!isCollectedOrder(order) || Number(order.total || 0) <= 0) {
     return null;
   }
 
-  if (order.counter_payment_method === 'cash' || order.counter_payment_method === 'online') {
+  if (
+    order.counter_payment_method === 'cash' ||
+    order.counter_payment_method === 'online' ||
+    order.counter_payment_method === 'split'
+  ) {
     return order.counter_payment_method;
   }
 
@@ -103,23 +108,43 @@ function getPaymentChannel(order: Order): 'cash' | 'online' | null {
   return null;
 }
 
+function getCollectionParts(order: Order) {
+  const amount = Number(order.total || 0);
+  const channel = getPaymentChannel(order);
+
+  if (!Number.isFinite(amount) || amount <= 0 || !channel) {
+    return { cash: 0, online: 0, total: 0 };
+  }
+
+  if (channel === 'split') {
+    const recordedOnline = Number(order.online_received_amount || 0);
+    const online = Math.min(amount, Number.isFinite(recordedOnline) ? Math.max(0, recordedOnline) : 0);
+    return {
+      cash: Math.max(0, amount - online),
+      online,
+      total: amount,
+    };
+  }
+
+  return {
+    cash: channel === 'cash' ? amount : 0,
+    online: channel === 'online' ? amount : 0,
+    total: amount,
+  };
+}
+
 function summarizeCollections(orders: Order[]): CollectionSummary {
   return orders.reduce<CollectionSummary>((summary, order) => {
     if (!isCollectedOrder(order)) {
       return summary;
     }
 
-    const amount = Number(order.total || 0);
-    if (!Number.isFinite(amount)) {
-      return summary;
-    }
-
-    const channel = getPaymentChannel(order);
+    const collection = getCollectionParts(order);
 
     return {
-      cash: summary.cash + (channel === 'cash' ? amount : 0),
-      online: summary.online + (channel === 'online' ? amount : 0),
-      total: summary.total + amount,
+      cash: summary.cash + collection.cash,
+      online: summary.online + collection.online,
+      total: summary.total + collection.total,
       orders: summary.orders + 1,
     };
   }, {
@@ -160,6 +185,13 @@ export default function AdminDashboard() {
 
   const loadStats = useCallback(async () => {
     setLoading(true);
+
+    try {
+      await expireStalePendingOrders();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to refresh pending order status';
+      showToast(message, 'error');
+    }
 
     const todayStart = startOfToday();
     const weekStart = startOfWeek(todayStart);

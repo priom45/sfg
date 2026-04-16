@@ -5,6 +5,10 @@ import {
   getReviewRewardCouponForCheckout,
   reserveReviewRewardCoupon,
 } from "../_shared/review-rewards.ts";
+import {
+  releaseOrderInventory,
+  reserveOrderInventory,
+} from "../_shared/inventory.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -174,6 +178,11 @@ async function cleanupCreatedOrder(
   adminClient: ReturnType<typeof createClient>,
   orderId: string,
 ) {
+  const releaseResult = await releaseOrderInventory(adminClient, orderId);
+  if (!releaseResult.success) {
+    throw new Error(releaseResult.error || "Failed to restore inventory");
+  }
+
   const { error: orderItemsDeleteError } = await adminClient
     .from("order_items")
     .delete()
@@ -339,6 +348,11 @@ Deno.serve(async (req: Request) => {
       }, 409);
     }
 
+    const { error: expireOrdersError } = await adminClient.rpc("expire_stale_pending_orders");
+    if (expireOrdersError) {
+      throw expireOrdersError;
+    }
+
     const unavailableMenuItemNames = await getUnavailableMenuItemNames(adminClient, items);
 
     if (unavailableMenuItemNames.length > 0) {
@@ -414,6 +428,15 @@ Deno.serve(async (req: Request) => {
     if (itemsError) {
       await cleanupCreatedOrder(adminClient, order.id);
       throw itemsError;
+    }
+
+    const inventoryReservation = await reserveOrderInventory(adminClient, order.id);
+    if (!inventoryReservation.success) {
+      await cleanupCreatedOrder(adminClient, order.id);
+      return jsonResponse({
+        success: false,
+        error: inventoryReservation.error || "Some items are out of stock right now",
+      }, 409);
     }
 
     if (reviewRewardCouponId) {

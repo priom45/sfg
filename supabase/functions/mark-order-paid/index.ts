@@ -10,8 +10,9 @@ const corsHeaders = {
 
 interface MarkPaidBody {
   orderId?: string;
-  counterPaymentMethod?: "cash" | "online";
+  counterPaymentMethod?: "cash" | "online" | "split";
   cashReceivedAmount?: number;
+  onlineReceivedAmount?: number;
 }
 
 function roundCurrency(value: number) {
@@ -19,7 +20,7 @@ function roundCurrency(value: number) {
 }
 
 function getCounterPaymentMethod(value: unknown) {
-  if (value === "online" || value === "cash") {
+  if (value === "online" || value === "cash" || value === "split") {
     return value;
   }
   return null;
@@ -88,7 +89,8 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: false, error: "Missing authorization" }, 401);
     }
 
-    const { orderId, counterPaymentMethod, cashReceivedAmount } = await req.json() as MarkPaidBody;
+    const { orderId, counterPaymentMethod, cashReceivedAmount, onlineReceivedAmount } =
+      await req.json() as MarkPaidBody;
     const appOrderId = orderId?.trim() || "";
 
     if (!appOrderId) {
@@ -131,7 +133,9 @@ Deno.serve(async (req: Request) => {
 
     const { data: order, error: orderError } = await adminClient
       .from("orders")
-      .select("id, order_id, total, payment_status, payment_provider, payment_method")
+      .select(
+        "id, order_id, total, payment_status, payment_provider, payment_method, counter_payment_method, cash_received_amount, online_received_amount, paid_amount",
+      )
       .eq("order_id", appOrderId)
       .maybeSingle();
 
@@ -140,20 +144,69 @@ Deno.serve(async (req: Request) => {
     }
 
     const orderTotal = roundCurrency(Number(order.total ?? 0));
+    const existingPaidAmount = order.payment_status === "paid"
+      ? orderTotal
+      : roundCurrency(Number(order.paid_amount ?? 0));
+    const amountDue = Math.max(0, roundCurrency(orderTotal - existingPaidAmount));
     const selectedCounterPaymentMethod = getCounterPaymentMethod(counterPaymentMethod) ??
       (order.payment_method === "upi" ? "online" : "cash");
-    const rawCashAmount = Number(cashReceivedAmount ?? orderTotal);
+    const rawCashAmount = Number(
+      cashReceivedAmount ?? (selectedCounterPaymentMethod === "cash" ? amountDue : 0),
+    );
+    const rawOnlineAmount = Number(
+      onlineReceivedAmount ?? (selectedCounterPaymentMethod === "online" ? amountDue : 0),
+    );
     const cashAmount = roundCurrency(rawCashAmount);
+    const onlineAmount = roundCurrency(rawOnlineAmount);
 
     if (
       order.payment_provider !== "razorpay" &&
       selectedCounterPaymentMethod === "cash" &&
-      orderTotal > 0 &&
-      (!Number.isFinite(cashAmount) || cashAmount < orderTotal)
+      amountDue > 0 &&
+      (!Number.isFinite(cashAmount) || cashAmount < amountDue)
     ) {
       return jsonResponse({
         success: false,
-        error: `Cash received must be at least ₹${orderTotal.toFixed(2)}`,
+        error: `Cash received must be at least ₹${amountDue.toFixed(2)}`,
+      }, 400);
+    }
+
+    if (
+      order.payment_provider !== "razorpay" &&
+      selectedCounterPaymentMethod === "split" &&
+      amountDue > 0
+    ) {
+      if (!Number.isFinite(cashAmount) || cashAmount <= 0) {
+        return jsonResponse({
+          success: false,
+          error: "Enter the cash amount for this split payment",
+        }, 400);
+      }
+
+      if (!Number.isFinite(onlineAmount) || onlineAmount <= 0) {
+        return jsonResponse({
+          success: false,
+          error: "Enter the UPI amount for this split payment",
+        }, 400);
+      }
+
+      if (roundCurrency(cashAmount + onlineAmount) < amountDue) {
+        return jsonResponse({
+          success: false,
+          error: `Cash + UPI must cover ₹${amountDue.toFixed(2)}`,
+        }, 400);
+      }
+    }
+
+    if (
+      order.payment_provider !== "razorpay" &&
+      selectedCounterPaymentMethod === "online" &&
+      amountDue > 0 &&
+      (!Number.isFinite(onlineAmount) || onlineAmount < amountDue)
+    ) {
+      return jsonResponse({
+        success: false,
+        error: `UPI received must be at least ₹${amountDue.toFixed(2)}`,
       }, 400);
     }
 
@@ -161,13 +214,33 @@ Deno.serve(async (req: Request) => {
       const paymentUpdate: Record<string, string | number | null> = {
         payment_status: "paid",
         payment_verified_at: new Date().toISOString(),
+        paid_amount: orderTotal,
       };
 
       if (order.payment_provider !== "razorpay") {
-        paymentUpdate.payment_method = selectedCounterPaymentMethod === "online" ? "upi" : "cod";
+        const existingCashAmount = roundCurrency(Number(order.cash_received_amount ?? 0));
+        const existingOnlineAmount = roundCurrency(Number(order.online_received_amount ?? 0));
+        const cashDelta = selectedCounterPaymentMethod === "cash" || selectedCounterPaymentMethod === "split"
+          ? cashAmount
+          : 0;
+        const onlineDelta = selectedCounterPaymentMethod === "online"
+          ? amountDue
+          : selectedCounterPaymentMethod === "split"
+            ? onlineAmount
+            : 0;
+        const nextCashAmount = roundCurrency(existingCashAmount + cashDelta);
+        const nextOnlineAmount = roundCurrency(existingOnlineAmount + onlineDelta);
+        const resolvedCounterPaymentMethod = nextCashAmount > 0 && nextOnlineAmount > 0
+          ? "split"
+          : nextOnlineAmount > 0
+            ? "online"
+            : "cash";
+
+        paymentUpdate.payment_method = resolvedCounterPaymentMethod === "cash" ? "cod" : "upi";
         paymentUpdate.payment_provider = null;
-        paymentUpdate.counter_payment_method = selectedCounterPaymentMethod;
-        paymentUpdate.cash_received_amount = selectedCounterPaymentMethod === "cash" ? cashAmount : null;
+        paymentUpdate.counter_payment_method = resolvedCounterPaymentMethod;
+        paymentUpdate.cash_received_amount = nextCashAmount > 0 ? nextCashAmount : null;
+        paymentUpdate.online_received_amount = nextOnlineAmount > 0 ? nextOnlineAmount : null;
       }
 
       const { error: updateError } = await adminClient

@@ -3,15 +3,16 @@ import { useNavigate } from 'react-router-dom';
 import {
   ChefHat, LogOut, Clock, Check, Flame, Package, Users, Timer,
   Store, Truck, Volume2, VolumeX, Bell, Zap, Wallet, BadgeCheck, Copy,
+  Plus,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { getCompletedOrderLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment } from '../../lib/orderLabels';
+import { getCompletedOrderLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment, isDineInOrder } from '../../lib/orderLabels';
 import { markOrderPaid } from '../../lib/markOrderPaid';
 import { markOrderReady } from '../../lib/markOrderReady';
 import { playNewOrderAlert, playAcceptSound, playOrderCompleteSound } from '../../lib/sounds';
 import { useToast } from '../../components/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import type { CounterPaymentMethod, Order } from '../../types';
+import type { Category, CounterPaymentMethod, MenuItem, Order } from '../../types';
 
 interface OrderItemRow {
   id: string;
@@ -24,25 +25,55 @@ interface OrderItemRow {
 }
 
 type Tab = 'payments' | 'queue' | 'preparing' | 'done';
+type PaymentCategory = 'all' | 'before' | 'after';
 type PaymentDraft = {
   method: CounterPaymentMethod;
   cashReceived: string;
+  onlineReceived: string;
 };
+type AddItemDraft = {
+  categoryId: string;
+  menuItemId: string;
+  quantity: string;
+};
+type ChefCategory = Pick<Category, 'id' | 'name' | 'display_order'>;
+type ChefMenuItem = Pick<MenuItem, 'id' | 'name' | 'price' | 'is_available' | 'category_id' | 'display_order'>;
 
 const ACTIVE_ORDER_STATUSES = ['pending', 'confirmed', 'preparing', 'packed'] as const;
 const CHEF_REFRESH_DEBOUNCE_MS = 250;
 const CHEF_POLL_INTERVAL_MS = 5000;
 
+function getExtraItemCategories(categories: ChefCategory[], items: ChefMenuItem[]) {
+  const categoryIdsWithItems = new Set(items.map((item) => item.category_id).filter(Boolean));
+  const knownCategories = categories.filter((category) => categoryIdsWithItems.has(category.id));
+  const knownCategoryIds = new Set(knownCategories.map((category) => category.id));
+  const fallbackCategories = Array.from(categoryIdsWithItems)
+    .filter((categoryId) => !knownCategoryIds.has(categoryId))
+    .map((categoryId, index) => ({
+      id: categoryId,
+      name: `Category ${knownCategories.length + index + 1}`,
+      display_order: Number.MAX_SAFE_INTEGER,
+    }));
+
+  return [...knownCategories, ...fallbackCategories];
+}
+
 export default function ChefDashboard() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [orderItemsMap, setOrderItemsMap] = useState<Record<string, OrderItemRow[]>>({});
+  const [menuCategories, setMenuCategories] = useState<ChefCategory[]>([]);
+  const [menuItems, setMenuItems] = useState<ChefMenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('queue');
+  const [paymentCategory, setPaymentCategory] = useState<PaymentCategory>('all');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [newOrderFlash, setNewOrderFlash] = useState(false);
   const [acceptingOrderId, setAcceptingOrderId] = useState<string | null>(null);
   const [payingOrderId, setPayingOrderId] = useState<string | null>(null);
   const [paymentDrafts, setPaymentDrafts] = useState<Record<string, PaymentDraft>>({});
+  const [activeAddItemOrderId, setActiveAddItemOrderId] = useState<string | null>(null);
+  const [addItemDrafts, setAddItemDrafts] = useState<Record<string, AddItemDraft>>({});
+  const [addingItemOrderId, setAddingItemOrderId] = useState<string | null>(null);
   const [completingOrderId, setCompletingOrderId] = useState<string | null>(null);
   const [handoffOrderId, setHandoffOrderId] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -124,6 +155,35 @@ export default function ChefDashboard() {
     setLoading(false);
   }, [showToast, soundEnabled]);
 
+  const loadMenuItems = useCallback(async () => {
+    const [categoriesResult, menuItemsResult] = await Promise.all([
+      supabase
+        .from('categories')
+        .select('id, name, display_order')
+        .order('display_order', { ascending: true }),
+      supabase
+        .from('menu_items')
+        .select('id, name, price, is_available, category_id, display_order')
+        .eq('is_available', true)
+        .order('display_order', { ascending: true }),
+    ]);
+
+    if (categoriesResult.error) {
+      console.error('Failed to load chef menu categories', categoriesResult.error);
+      showToast(categoriesResult.error.message || 'Failed to load categories for extras', 'error');
+    } else {
+      setMenuCategories((categoriesResult.data || []) as ChefCategory[]);
+    }
+
+    if (menuItemsResult.error) {
+      console.error('Failed to load chef menu items', menuItemsResult.error);
+      showToast(menuItemsResult.error.message || 'Failed to load menu items for extras', 'error');
+      return;
+    }
+
+    setMenuItems((menuItemsResult.data || []) as ChefMenuItem[]);
+  }, [showToast]);
+
   const scheduleRefresh = useCallback(() => {
     if (refreshTimeoutRef.current) {
       clearTimeout(refreshTimeoutRef.current);
@@ -137,6 +197,7 @@ export default function ChefDashboard() {
 
   useEffect(() => {
     void loadOrders();
+    void loadMenuItems();
 
     const channel = supabase
       .channel('chef-orders')
@@ -187,7 +248,7 @@ export default function ChefDashboard() {
       window.removeEventListener('online', refreshIfVisible);
       supabase.removeChannel(channel);
     };
-  }, [loadOrders, scheduleRefresh]);
+  }, [loadOrders, loadMenuItems, scheduleRefresh]);
 
   async function acceptOrder(order: Order) {
     if (acceptingOrderId === order.id) return;
@@ -272,6 +333,7 @@ export default function ChefDashboard() {
     order: Order,
     counterPaymentMethod: CounterPaymentMethod,
     cashReceivedAmount?: number,
+    onlineReceivedAmount?: number,
   ) {
     if (payingOrderId === order.id) return;
     setPayingOrderId(order.id);
@@ -280,8 +342,15 @@ export default function ChefDashboard() {
       const result = await markOrderPaid(order.order_id, {
         counterPaymentMethod,
         cashReceivedAmount,
+        onlineReceivedAmount,
       });
-      showToast(counterPaymentMethod === 'cash' ? 'Cash payment marked as paid' : 'Online payment marked as paid');
+      showToast(
+        counterPaymentMethod === 'cash'
+          ? 'Cash payment marked as paid'
+          : counterPaymentMethod === 'split'
+            ? 'Cash and UPI payment marked as paid'
+            : 'Online payment marked as paid',
+      );
       setPaymentDrafts((current) => {
         const next = { ...current };
         delete next[order.id];
@@ -312,10 +381,7 @@ export default function ChefDashboard() {
 
   function updatePaymentDraft(order: Order, patch: Partial<PaymentDraft>) {
     setPaymentDrafts((current) => {
-      const existing = current[order.id] || {
-        method: getDefaultCounterPaymentMethod(order),
-        cashReceived: getDefaultCashReceived(order),
-      };
+      const existing = current[order.id] || getDefaultPaymentDraft(order);
 
       return {
         ...current,
@@ -327,7 +393,132 @@ export default function ChefDashboard() {
     });
   }
 
-  const paymentOrders = orders.filter((o) => o.status === 'pending' && isAwaitingCounterPayment(o));
+  function getFirstExtraItemCategoryId() {
+    const categoryIdsWithItems = new Set(menuItems.map((item) => item.category_id).filter(Boolean));
+    return menuCategories.find((category) => categoryIdsWithItems.has(category.id))?.id ||
+      menuItems[0]?.category_id ||
+      '';
+  }
+
+  function getFirstMenuItemIdForCategory(categoryId: string) {
+    return menuItems.find((item) => item.category_id === categoryId)?.id || '';
+  }
+
+  function getDefaultAddItemDraft(): AddItemDraft {
+    const categoryId = getFirstExtraItemCategoryId();
+
+    return {
+      categoryId,
+      menuItemId: getFirstMenuItemIdForCategory(categoryId) || menuItems[0]?.id || '',
+      quantity: '1',
+    };
+  }
+
+  function normalizeAddItemDraft(draft: Partial<AddItemDraft>): AddItemDraft {
+    const selectedItem = menuItems.find((item) => item.id === draft.menuItemId);
+    const categoryId = draft.categoryId || selectedItem?.category_id || getFirstExtraItemCategoryId();
+    const categoryItems = categoryId
+      ? menuItems.filter((item) => item.category_id === categoryId)
+      : menuItems;
+    const menuItemId = categoryItems.some((item) => item.id === draft.menuItemId)
+      ? draft.menuItemId || ''
+      : categoryItems[0]?.id || menuItems[0]?.id || '';
+
+    return {
+      categoryId,
+      menuItemId,
+      quantity: draft.quantity || '1',
+    };
+  }
+
+  function updateAddItemDraft(order: Order, patch: Partial<AddItemDraft>) {
+    setAddItemDrafts((current) => {
+      const existing = current[order.id] || getDefaultAddItemDraft();
+      const nextDraft = {
+        ...existing,
+        ...patch,
+      };
+
+      if (patch.categoryId && patch.categoryId !== existing.categoryId) {
+        nextDraft.menuItemId = getFirstMenuItemIdForCategory(patch.categoryId);
+      }
+
+      return {
+        ...current,
+        [order.id]: normalizeAddItemDraft(nextDraft),
+      };
+    });
+  }
+
+  function openAddItemPanel(order: Order) {
+    setActiveAddItemOrderId(order.id);
+    updateAddItemDraft(order, addItemDrafts[order.id] || getDefaultAddItemDraft());
+  }
+
+  async function addItemToOrder(order: Order) {
+    if (addingItemOrderId === order.id) return;
+
+    const draft = normalizeAddItemDraft(addItemDrafts[order.id] || getDefaultAddItemDraft());
+    const selectedItem = menuItems.find((item) => item.id === draft.menuItemId);
+    const quantity = Math.max(1, Number.parseInt(draft.quantity || '1', 10) || 1);
+
+    if (!selectedItem) {
+      showToast('Choose an item to add', 'error');
+      return;
+    }
+
+    setAddingItemOrderId(order.id);
+
+    const { data, error } = await supabase.rpc('add_staff_order_item', {
+      p_order_id: order.id,
+      p_menu_item_id: selectedItem.id,
+      p_quantity: quantity,
+    });
+
+    if (error) {
+      console.error('Failed to add item to order', error);
+      const missingRpc = error.code === 'PGRST202' || error.message?.includes('add_staff_order_item');
+      showToast(
+        missingRpc
+          ? 'Run the latest Supabase migration before adding extras to orders'
+          : error.message || 'Failed to add item to order',
+        'error',
+      );
+      setAddingItemOrderId(null);
+      return;
+    }
+
+    try {
+      const result = data as { lineTotal?: number; paymentStatus?: string } | null;
+      const addedAmount = Number(result?.lineTotal || 0);
+      const reopenedPayment = result?.paymentStatus === 'pending' && order.payment_status === 'paid' && addedAmount > 0;
+
+      showToast(reopenedPayment ? 'Item added. Collect the remaining payment.' : 'Item added to order');
+      setActiveAddItemOrderId(null);
+      setAddItemDrafts((current) => {
+        const next = { ...current };
+        delete next[order.id];
+        return next;
+      });
+      await loadOrders();
+    } finally {
+      setAddingItemOrderId(null);
+    }
+  }
+
+  const paymentOrders = orders.filter((o) => isAwaitingCounterPayment(o) && !['cancelled', 'expired'].includes(o.status));
+  const collectFirstPaymentOrders = paymentOrders.filter((o) => o.status === 'pending');
+  const afterDiningPaymentOrders = paymentOrders.filter((o) => o.status !== 'pending');
+  const filteredPaymentOrders = paymentCategory === 'before'
+    ? collectFirstPaymentOrders
+    : paymentCategory === 'after'
+      ? afterDiningPaymentOrders
+      : paymentOrders;
+  const paymentCategoryOptions: { key: PaymentCategory; label: string; count: number }[] = [
+    { key: 'all', label: 'All', count: paymentOrders.length },
+    { key: 'before', label: 'Collect First', count: collectFirstPaymentOrders.length },
+    { key: 'after', label: 'After Dining', count: afterDiningPaymentOrders.length },
+  ];
   const queueOrders = orders.filter((o) => o.status === 'pending' && !isAwaitingOnlinePayment(o) && !isAwaitingCounterPayment(o));
   const preparingOrders = orders.filter((o) => o.status === 'preparing' || o.status === 'confirmed');
   const doneOrders = orders.filter((o) => o.status === 'packed' || o.status === 'delivered');
@@ -347,12 +538,20 @@ export default function ChefDashboard() {
   ];
 
   const displayOrders = tab === 'payments'
-    ? paymentOrders
+    ? filteredPaymentOrders
     : tab === 'queue'
       ? queueOrders
       : tab === 'preparing'
         ? preparingOrders
         : todayDone;
+  const extraItemCategories = getExtraItemCategories(menuCategories, menuItems);
+  const paymentEmptyTitle = paymentOrders.length === 0
+    ? 'No counter payments waiting'
+    : paymentCategory === 'before'
+      ? 'No collect-first payments'
+      : paymentCategory === 'after'
+        ? 'No after-dining payments'
+        : 'No payments in this category';
 
   if (loading) {
     return (
@@ -445,6 +644,29 @@ export default function ChefDashboard() {
       </div>
 
       <main className="max-w-2xl mx-auto px-4 py-4 pb-20 space-y-3">
+        {tab === 'payments' && paymentOrders.length > 0 && (
+          <div className="grid grid-cols-3 gap-2">
+            {paymentCategoryOptions.map((category) => (
+              <button
+                key={category.key}
+                onClick={() => setPaymentCategory(category.key)}
+                className={`rounded-xl border px-2 py-2 text-[12px] font-bold transition-colors ${
+                  paymentCategory === category.key
+                    ? 'border-rose-400 bg-rose-500 text-white'
+                    : 'border-brand-border bg-brand-surface text-brand-text-muted hover:border-rose-400/40'
+                }`}
+              >
+                <span className="block leading-tight">{category.label}</span>
+                <span className={`mt-1 inline-flex min-w-[22px] justify-center rounded-full px-1.5 py-0.5 text-[11px] ${
+                  paymentCategory === category.key ? 'bg-brand-surface-strong/80' : 'bg-brand-surface-light'
+                }`}>
+                  {category.count}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
         {displayOrders.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="w-16 h-16 bg-brand-surface rounded-2xl flex items-center justify-center mb-4">
@@ -454,14 +676,16 @@ export default function ChefDashboard() {
                <Check size={28} className="text-brand-text-dim" />}
             </div>
             <p className="text-brand-text-muted font-semibold">
-              {tab === 'payments' ? 'No counter payments waiting' :
+              {tab === 'payments' ? paymentEmptyTitle :
                tab === 'queue' ? 'No orders in queue' :
                tab === 'preparing' ? 'No orders being prepared' :
                'No completed orders today'}
             </p>
             {tab === 'payments' && (
               <p className="text-brand-text-dim text-[12px] mt-1">
-                Counter cash and UPI orders will appear here until marked paid
+                {paymentOrders.length === 0
+                  ? 'Counter cash and UPI orders will appear here until marked paid'
+                  : 'Switch payment category to view another group'}
               </p>
             )}
             {tab === 'queue' && (
@@ -478,19 +702,43 @@ export default function ChefDashboard() {
           const isQueue = order.status === 'pending' && !isPaymentPending;
           const isPreparing = order.status === 'preparing' || order.status === 'confirmed';
           const isReady = order.status === 'packed';
+          const canAddItems = !['cancelled', 'expired', 'delivered'].includes(order.status);
+          const canStartBeforePayment = isPaymentPending && order.status === 'pending' && isDineInOrder(order);
           const totalQty = items.reduce((s, i) => s + i.quantity, 0);
-          const paymentDraft = paymentDrafts[order.id] || {
-            method: getDefaultCounterPaymentMethod(order),
-            cashReceived: getDefaultCashReceived(order),
-          };
-          const totalDue = roundCurrency(order.total);
+          const paymentDraft = paymentDrafts[order.id] || getDefaultPaymentDraft(order);
+          const addItemDraft = normalizeAddItemDraft(addItemDrafts[order.id] || getDefaultAddItemDraft());
+          const categoryMenuItems = addItemDraft.categoryId
+            ? menuItems.filter((item) => item.category_id === addItemDraft.categoryId)
+            : menuItems;
+          const selectedAddMenuItem = categoryMenuItems.find((item) => item.id === addItemDraft.menuItemId);
+          const addItemQuantity = Math.max(1, Number.parseInt(addItemDraft.quantity || '1', 10) || 1);
+          const addItemLineTotal = selectedAddMenuItem ? roundCurrency(Number(selectedAddMenuItem.price || 0) * addItemQuantity) : 0;
+          const paidAmount = getOrderPaidAmount(order);
+          const totalDue = getOrderAmountDue(order);
+          const hasPartialPayment = paidAmount > 0 && totalDue > 0;
           const hasCashInput = paymentDraft.cashReceived.trim().length > 0;
+          const hasOnlineInput = paymentDraft.onlineReceived.trim().length > 0;
           const enteredCashAmount = Number(paymentDraft.cashReceived);
+          const enteredOnlineAmount = Number(paymentDraft.onlineReceived);
           const hasValidCashAmount = Number.isFinite(enteredCashAmount);
+          const hasValidOnlineAmount = Number.isFinite(enteredOnlineAmount);
           const roundedEnteredCashAmount = hasValidCashAmount ? roundCurrency(enteredCashAmount) : 0;
+          const roundedEnteredOnlineAmount = hasValidOnlineAmount ? roundCurrency(enteredOnlineAmount) : 0;
           const remainingCash = Math.max(0, roundCurrency(totalDue - roundedEnteredCashAmount));
           const changeDue = Math.max(0, roundCurrency(roundedEnteredCashAmount - totalDue));
+          const splitReceivedTotal = roundCurrency(roundedEnteredCashAmount + roundedEnteredOnlineAmount);
+          const remainingSplit = Math.max(0, roundCurrency(totalDue - splitReceivedTotal));
+          const splitOverage = Math.max(0, roundCurrency(splitReceivedTotal - totalDue));
           const canMarkCashPaid = totalDue <= 0 || (hasCashInput && hasValidCashAmount && roundedEnteredCashAmount >= totalDue);
+          const canMarkSplitPaid = totalDue <= 0 || (
+            hasCashInput &&
+            hasOnlineInput &&
+            hasValidCashAmount &&
+            hasValidOnlineAmount &&
+            roundedEnteredCashAmount > 0 &&
+            roundedEnteredOnlineAmount > 0 &&
+            splitReceivedTotal >= totalDue
+          );
 
           return (
             <div
@@ -547,7 +795,14 @@ export default function ChefDashboard() {
                     {order.customer_name} -- {getTimeAgo(order.placed_at)}
                   </p>
                 </div>
-                <span className="font-bold text-brand-gold text-lg tabular-nums">{'\u20B9'}{order.total}</span>
+                <div className="text-right">
+                  <span className="font-bold text-brand-gold text-lg tabular-nums">{'\u20B9'}{order.total}</span>
+                  {hasPartialPayment && (
+                    <p className="text-[11px] font-semibold text-rose-300">
+                      Due {'\u20B9'}{formatMoney(totalDue)}
+                    </p>
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center gap-2 mb-3 text-[12px] flex-wrap">
@@ -569,9 +824,14 @@ export default function ChefDashboard() {
                 }`}>
                   {order.payment_status === 'paid' ? <BadgeCheck size={12} /> : <Wallet size={12} />}
                   {order.payment_status === 'paid'
-                    ? 'Paid'
+                    ? getCounterPaymentBadgeLabel(order)
                     : order.payment_method === 'upi' ? 'UPI Pending' : 'Cash Pending'}
                 </span>
+                {isPaymentPending && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-rose-500/10 text-rose-300 font-bold">
+                    {getPaymentCategoryLabel(order)}
+                  </span>
+                )}
               </div>
 
               {isPaymentPending && (
@@ -584,16 +844,22 @@ export default function ChefDashboard() {
                           {getPendingPaymentLabel(order)}
                         </p>
                         <p className="text-[11px] text-brand-text-dim">
-                          Choose how this order was paid, then confirm it here. -- {order.order_id} -- {'\u20B9'}{order.total}
+                          Choose how this order was paid, then confirm it here. -- {order.order_id} -- Due {'\u20B9'}{formatMoney(totalDue)}
                         </p>
+                        {hasPartialPayment && (
+                          <p className="text-[11px] text-brand-text-dim">
+                            Already paid {'\u20B9'}{formatMoney(paidAmount)} of {'\u20B9'}{formatMoney(order.total)}
+                          </p>
+                        )}
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-3 gap-2">
                       <button
                         onClick={() => updatePaymentDraft(order, {
                           method: 'cash',
                           cashReceived: paymentDraft.cashReceived || getDefaultCashReceived(order),
+                          onlineReceived: '',
                         })}
                         className={`px-3 py-2 rounded-lg border text-[12px] font-bold transition-colors ${
                           paymentDraft.method === 'cash'
@@ -604,18 +870,36 @@ export default function ChefDashboard() {
                         Hand Cash
                       </button>
                       <button
-                        onClick={() => updatePaymentDraft(order, { method: 'online' })}
+                        onClick={() => updatePaymentDraft(order, {
+                          method: 'online',
+                          cashReceived: '',
+                          onlineReceived: formatMoney(totalDue),
+                        })}
                         className={`px-3 py-2 rounded-lg border text-[12px] font-bold transition-colors ${
                           paymentDraft.method === 'online'
                             ? 'border-sky-400 bg-sky-500 text-white'
                             : 'border-rose-500/20 bg-brand-surface text-brand-text-muted hover:border-rose-400/40'
                         }`}
                       >
-                        Paid Online
+                        UPI
+                      </button>
+                      <button
+                        onClick={() => updatePaymentDraft(order, {
+                          method: 'split',
+                          cashReceived: '',
+                          onlineReceived: '',
+                        })}
+                        className={`px-3 py-2 rounded-lg border text-[12px] font-bold transition-colors ${
+                          paymentDraft.method === 'split'
+                            ? 'border-brand-gold bg-brand-gold text-brand-bg'
+                            : 'border-rose-500/20 bg-brand-surface text-brand-text-muted hover:border-rose-400/40'
+                        }`}
+                      >
+                        Cash + UPI
                       </button>
                     </div>
 
-                    {paymentDraft.method === 'cash' ? (
+                    {paymentDraft.method === 'cash' && (
                       <div className="rounded-lg border border-rose-500/20 bg-brand-surface/70 p-3 space-y-2">
                         <label className="block">
                           <span className="text-[11px] font-semibold uppercase tracking-wider text-brand-text-dim">
@@ -647,7 +931,9 @@ export default function ChefDashboard() {
                           </p>
                         )}
                       </div>
-                    ) : (
+                    )}
+
+                    {paymentDraft.method === 'online' && (
                       <div className="rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-2">
                         <p className="text-[11px] text-sky-200">
                           Use this when the customer has already paid by UPI or another online counter payment.
@@ -655,13 +941,85 @@ export default function ChefDashboard() {
                       </div>
                     )}
 
+                    {paymentDraft.method === 'split' && (
+                      <div className="rounded-lg border border-brand-gold/20 bg-brand-surface/70 p-3 space-y-3">
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="block">
+                            <span className="text-[11px] font-semibold uppercase tracking-wider text-brand-text-dim">
+                              Cash
+                            </span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={paymentDraft.cashReceived}
+                              onChange={(event) => updatePaymentDraft(order, { cashReceived: event.target.value })}
+                              placeholder="0"
+                              className="mt-1.5 w-full rounded-lg border border-brand-border bg-brand-surface px-3 py-2 text-sm text-white outline-none transition-colors focus:border-emerald-400"
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="text-[11px] font-semibold uppercase tracking-wider text-brand-text-dim">
+                              UPI
+                            </span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={paymentDraft.onlineReceived}
+                              onChange={(event) => updatePaymentDraft(order, { onlineReceived: event.target.value })}
+                              placeholder="0"
+                              className="mt-1.5 w-full rounded-lg border border-brand-border bg-brand-surface px-3 py-2 text-sm text-white outline-none transition-colors focus:border-sky-400"
+                            />
+                          </label>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-brand-text-dim">
+                          <span>Total due</span>
+                          <span className="font-semibold text-white">{'\u20B9'}{formatMoney(totalDue)}</span>
+                        </div>
+                        {(hasCashInput || hasOnlineInput) && (
+                          <p className={`text-[11px] font-semibold ${
+                            remainingSplit > 0 ? 'text-rose-300' : 'text-emerald-300'
+                          }`}>
+                            {remainingSplit > 0
+                              ? `Need ₹${formatMoney(remainingSplit)} more`
+                              : splitOverage > 0
+                                ? `Collected ₹${formatMoney(splitOverage)} extra`
+                                : 'Cash and UPI cover this bill'}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {canStartBeforePayment && (
+                      <button
+                        onClick={() => acceptOrder(order)}
+                        disabled={acceptingOrderId === order.id}
+                        className="w-full px-3 py-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200 text-[12px] font-bold hover:bg-amber-500/20 transition-colors active:scale-95 flex items-center justify-center gap-1 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Zap size={12} />
+                        {acceptingOrderId === order.id ? 'Starting...' : 'Start Preparing, Collect Later'}
+                      </button>
+                    )}
+
                     <button
                       onClick={() => markPaymentCollected(
                         order,
                         paymentDraft.method,
-                        paymentDraft.method === 'cash' && hasValidCashAmount ? roundedEnteredCashAmount : undefined,
+                        (paymentDraft.method === 'cash' || paymentDraft.method === 'split') && hasValidCashAmount
+                          ? roundedEnteredCashAmount
+                          : undefined,
+                        paymentDraft.method === 'split' && hasValidOnlineAmount
+                          ? roundedEnteredOnlineAmount
+                          : paymentDraft.method === 'online'
+                            ? totalDue
+                            : undefined,
                       )}
-                      disabled={payingOrderId === order.id || (paymentDraft.method === 'cash' && !canMarkCashPaid)}
+                      disabled={
+                        payingOrderId === order.id ||
+                        (paymentDraft.method === 'cash' && !canMarkCashPaid) ||
+                        (paymentDraft.method === 'split' && !canMarkSplitPaid)
+                      }
                       className="w-full px-3 py-2.5 rounded-lg bg-emerald-500 text-white text-[12px] font-bold hover:bg-emerald-600 transition-colors active:scale-95 flex items-center justify-center gap-1 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <Check size={12} />
@@ -669,11 +1027,17 @@ export default function ChefDashboard() {
                         ? 'Marking...'
                         : paymentDraft.method === 'cash'
                           ? 'Mark Cash Paid'
-                          : 'Mark Online Paid'}
+                          : paymentDraft.method === 'split'
+                            ? 'Mark Cash + UPI Paid'
+                            : 'Mark UPI Paid'}
                     </button>
                   </div>
                   <p className="mt-2 text-[11px] text-brand-text-dim">
-                    After payment is marked, this order moves into the chef queue.
+                    {canStartBeforePayment
+                      ? 'For dine-in, you can start preparing now and collect payment after serving.'
+                      : order.status === 'pending'
+                      ? 'After payment is marked, this order moves into the chef queue.'
+                      : 'After payment is marked, this order stays in its current kitchen stage.'}
                   </p>
                 </div>
               )}
@@ -689,7 +1053,7 @@ export default function ChefDashboard() {
                       <p className="text-[11px] text-brand-text-dim">
                         {order.payment_method === 'upi'
                           ? 'Payment still needs confirmation in the payments panel'
-                          : 'Cash still needs to be collected in the payments panel'} -- {'\u20B9'}{order.total}
+                          : 'Cash still needs to be collected in the payments panel'} -- Due {'\u20B9'}{formatMoney(totalDue)}
                       </p>
                     </div>
                   </div>
@@ -725,6 +1089,104 @@ export default function ChefDashboard() {
               ) : (
                 <div className="bg-brand-surface-light/60 rounded-lg px-3 py-3 mb-3 text-center">
                   <p className="text-[12px] text-brand-text-dim">Loading items...</p>
+                </div>
+              )}
+
+              {canAddItems && (
+                <div className="mb-3">
+                  {activeAddItemOrderId === order.id ? (
+                    <div className="rounded-xl border border-brand-gold/20 bg-brand-gold/5 p-3 space-y-3">
+                      <div className="space-y-2">
+                        <label className="block">
+                          <span className="text-[11px] font-semibold uppercase tracking-wider text-brand-text-dim">
+                            Category
+                          </span>
+                          <select
+                            value={addItemDraft.categoryId}
+                            onChange={(event) => updateAddItemDraft(order, { categoryId: event.target.value })}
+                            disabled={extraItemCategories.length === 0}
+                            className="mt-1.5 w-full rounded-lg border border-brand-border bg-brand-surface px-3 py-2 text-sm text-white outline-none transition-colors focus:border-brand-gold disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {extraItemCategories.length === 0 ? (
+                              <option value="">No categories available</option>
+                            ) : (
+                              extraItemCategories.map((category) => (
+                                <option key={category.id} value={category.id}>
+                                  {category.name}
+                                </option>
+                              ))
+                            )}
+                          </select>
+                        </label>
+                        <div className="grid grid-cols-[1fr_76px] gap-2">
+                          <label className="block min-w-0">
+                            <span className="text-[11px] font-semibold uppercase tracking-wider text-brand-text-dim">
+                              Extra item
+                            </span>
+                            <select
+                              value={addItemDraft.menuItemId}
+                              onChange={(event) => updateAddItemDraft(order, { menuItemId: event.target.value })}
+                              disabled={categoryMenuItems.length === 0}
+                              className="mt-1.5 w-full rounded-lg border border-brand-border bg-brand-surface px-3 py-2 text-sm text-white outline-none transition-colors focus:border-brand-gold disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {categoryMenuItems.length === 0 ? (
+                                <option value="">No items in category</option>
+                              ) : (
+                                categoryMenuItems.map((item) => (
+                                  <option key={item.id} value={item.id}>
+                                    {item.name} - {'\u20B9'}{formatMoney(Number(item.price || 0))}
+                                  </option>
+                                ))
+                              )}
+                            </select>
+                          </label>
+                          <label className="block">
+                            <span className="text-[11px] font-semibold uppercase tracking-wider text-brand-text-dim">
+                              Qty
+                            </span>
+                            <input
+                              type="number"
+                              min="1"
+                              max="99"
+                              value={addItemDraft.quantity}
+                              onChange={(event) => updateAddItemDraft(order, { quantity: event.target.value })}
+                              className="mt-1.5 w-full rounded-lg border border-brand-border bg-brand-surface px-3 py-2 text-sm text-white outline-none transition-colors focus:border-brand-gold"
+                            />
+                          </label>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 text-[12px]">
+                        <span className="text-brand-text-dim">
+                          Adds {'\u20B9'}{formatMoney(addItemLineTotal)} to this order
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setActiveAddItemOrderId(null)}
+                            className="rounded-lg border border-brand-border px-3 py-1.5 font-bold text-brand-text-muted transition-colors hover:border-red-500/30 hover:text-red-300"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => addItemToOrder(order)}
+                            disabled={!selectedAddMenuItem || addingItemOrderId === order.id}
+                            className="rounded-lg bg-brand-gold px-3 py-1.5 font-bold text-brand-bg transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {addingItemOrderId === order.id ? 'Adding...' : 'Add'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => openAddItemPanel(order)}
+                      disabled={menuItems.length === 0}
+                      className="w-full rounded-xl border border-dashed border-brand-gold/30 bg-brand-gold/5 px-3 py-2.5 text-[12px] font-bold text-brand-gold transition-colors hover:bg-brand-gold/10 disabled:cursor-not-allowed disabled:opacity-60 flex items-center justify-center gap-1.5"
+                    >
+                      <Plus size={14} />
+                      Add Extra Item
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -829,11 +1291,57 @@ function getDoneOrderTime(order: Order) {
 }
 
 function getDefaultCounterPaymentMethod(order: Order): CounterPaymentMethod {
+  if (order.counter_payment_method === 'split') return 'split';
+  if (order.counter_payment_method === 'online' || order.counter_payment_method === 'cash') {
+    return order.counter_payment_method;
+  }
   return order.payment_method === 'upi' ? 'online' : 'cash';
 }
 
+function getDefaultPaymentDraft(order: Order): PaymentDraft {
+  const method = getDefaultCounterPaymentMethod(order);
+  const amountDue = getOrderAmountDue(order);
+
+  return {
+    method,
+    cashReceived: method === 'cash' ? formatMoney(amountDue) : '',
+    onlineReceived: method === 'online' ? formatMoney(amountDue) : '',
+  };
+}
+
 function getDefaultCashReceived(order: Order) {
-  return order.total > 0 ? formatMoney(order.total) : '';
+  const amountDue = getOrderAmountDue(order);
+  return amountDue > 0 ? formatMoney(amountDue) : '';
+}
+
+function getOrderPaidAmount(order: Order) {
+  const total = roundCurrency(Number(order.total || 0));
+  const explicitPaidAmount = Number(order.paid_amount ?? 0);
+
+  if (Number.isFinite(explicitPaidAmount) && explicitPaidAmount > 0) {
+    return Math.min(total, roundCurrency(explicitPaidAmount));
+  }
+
+  return order.payment_status === 'paid' ? total : 0;
+}
+
+function getOrderAmountDue(order: Order) {
+  return Math.max(0, roundCurrency(Number(order.total || 0) - getOrderPaidAmount(order)));
+}
+
+function getCounterPaymentBadgeLabel(order: Order) {
+  if (order.counter_payment_method === 'split') return 'Cash + UPI Paid';
+  if (order.counter_payment_method === 'online') return 'UPI Paid';
+  if (order.counter_payment_method === 'cash') return 'Cash Paid';
+  return 'Paid';
+}
+
+function getPaymentCategoryLabel(order: Order) {
+  if (order.status === 'pending') {
+    return isDineInOrder(order) ? 'Collect first or later' : 'Collect first';
+  }
+
+  return isDineInOrder(order) ? 'Collect after dining' : 'Collect remaining';
 }
 
 function roundCurrency(value: number) {

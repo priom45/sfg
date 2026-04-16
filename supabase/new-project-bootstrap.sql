@@ -145,7 +145,6 @@ CREATE TABLE IF NOT EXISTS customization_options (
   group_id uuid NOT NULL REFERENCES customization_groups(id),
   name text NOT NULL,
   price numeric(10,2) NOT NULL DEFAULT 0,
-  preview_image_url text NOT NULL DEFAULT '',
   is_available boolean NOT NULL DEFAULT true,
   display_order integer NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now()
@@ -299,15 +298,18 @@ CREATE POLICY "Anyone can view active offers"
     - Anyone can view their own order by order_id
 */
 
-CREATE SEQUENCE IF NOT EXISTS public.order_id_sequence
-  AS bigint
-  START WITH 1
-  INCREMENT BY 1;
-
 CREATE OR REPLACE FUNCTION generate_order_id()
 RETURNS text AS $$
+DECLARE
+  new_id text;
+  exists_check boolean;
 BEGIN
-  RETURN 'SW-' || nextval('public.order_id_sequence')::text;
+  LOOP
+    new_id := 'SW-' || LPAD(FLOOR(RANDOM() * 10000)::text, 4, '0');
+    SELECT EXISTS(SELECT 1 FROM orders WHERE order_id = new_id) INTO exists_check;
+    EXIT WHEN NOT exists_check;
+  END LOOP;
+  RETURN new_id;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1807,8 +1809,210 @@ ALTER PUBLICATION supabase_realtime ADD TABLE site_settings;
 -- END MIGRATION: 20260321153000_add_site_settings_and_closure_gate.sql
 
 -- ===============================================
+-- BEGIN MIGRATION: 20260322115214_add_smtp_config_to_site_settings.sql
+-- ===============================================
+
+/*
+  # Add SMTP configuration columns to site_settings
+
+  1. Modified Tables
+    - `site_settings`
+      - `smtp_host` (text) - SMTP server hostname
+      - `smtp_port` (integer) - SMTP server port, default 587
+      - `smtp_user` (text) - SMTP username / email
+      - `smtp_pass` (text) - SMTP password (encrypted at rest by Supabase)
+      - `smtp_from_email` (text) - Sender email address
+      - `smtp_from_name` (text) - Sender display name
+
+  2. Notes
+    - These columns allow edge functions to read SMTP config directly from the database
+    - Only admins can read/update these via existing RLS policies on site_settings
+*/
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'site_settings' AND column_name = 'smtp_host'
+  ) THEN
+    ALTER TABLE site_settings ADD COLUMN smtp_host text DEFAULT '' NOT NULL;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'site_settings' AND column_name = 'smtp_port'
+  ) THEN
+    ALTER TABLE site_settings ADD COLUMN smtp_port integer DEFAULT 587 NOT NULL;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'site_settings' AND column_name = 'smtp_user'
+  ) THEN
+    ALTER TABLE site_settings ADD COLUMN smtp_user text DEFAULT '' NOT NULL;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'site_settings' AND column_name = 'smtp_pass'
+  ) THEN
+    ALTER TABLE site_settings ADD COLUMN smtp_pass text DEFAULT '' NOT NULL;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'site_settings' AND column_name = 'smtp_from_email'
+  ) THEN
+    ALTER TABLE site_settings ADD COLUMN smtp_from_email text DEFAULT '' NOT NULL;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'site_settings' AND column_name = 'smtp_from_name'
+  ) THEN
+    ALTER TABLE site_settings ADD COLUMN smtp_from_name text DEFAULT 'The Supreme Waffle' NOT NULL;
+  END IF;
+END $$;
+
+UPDATE site_settings
+SET
+  smtp_host = 'smtp.hostinger.com',
+  smtp_port = 587,
+  smtp_user = 'noreply@thesupremewaffle.com',
+  smtp_from_email = 'noreply@thesupremewaffle.com',
+  smtp_from_name = 'The Supreme Waffle'
+WHERE id = true
+  AND smtp_host = '';
+
+-- END MIGRATION: 20260322115214_add_smtp_config_to_site_settings.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260322120822_secure_smtp_password_and_public_view.sql
+-- ===============================================
+
+/*
+  # Secure SMTP password and create public-safe view
+
+  1. Changes
+    - Create `site_settings_public` view that excludes `smtp_pass` column
+    - Drop the existing overly-permissive public SELECT policy on `site_settings`
+    - Replace with a new SELECT policy restricted to admin users only
+    - Grant SELECT on the new view to `anon` and `authenticated` roles
+    - Create an RPC `save_smtp_settings` for admins to upsert SMTP config including password
+
+  2. Security
+    - SMTP password is no longer readable by public or authenticated users via `site_settings`
+    - Only edge functions using service role can read `smtp_pass` from the table directly
+    - Admin users save SMTP settings through a secure RPC function
+    - Public/authenticated users read site settings through the safe view
+
+  3. Important Notes
+    - Frontend code must be updated to query `site_settings_public` view instead of `site_settings` table
+    - The admin panel save SMTP flow must call the `save_smtp_settings` RPC
+*/
+
+-- Create a public-safe view excluding smtp_pass
+CREATE OR REPLACE VIEW site_settings_public AS
+SELECT
+  id,
+  site_is_open,
+  closure_title,
+  closure_message,
+  reopening_text,
+  smtp_host,
+  smtp_port,
+  smtp_user,
+  smtp_from_email,
+  smtp_from_name,
+  created_at,
+  updated_at
+FROM site_settings;
+
+-- Grant access to the view
+GRANT SELECT ON site_settings_public TO anon, authenticated;
+
+-- Drop the dangerous public SELECT policy
+DROP POLICY IF EXISTS "Public can view site settings" ON site_settings;
+
+-- Create a restrictive SELECT policy - only admins can read the full table (including password)
+CREATE POLICY "Only admins can read site_settings"
+  ON site_settings
+  FOR SELECT
+  TO authenticated
+  USING (is_admin());
+
+-- Create an RPC function for admins to save SMTP settings
+CREATE OR REPLACE FUNCTION save_smtp_settings(
+  p_smtp_host text,
+  p_smtp_port integer,
+  p_smtp_user text,
+  p_smtp_pass text DEFAULT NULL,
+  p_smtp_from_email text DEFAULT '',
+  p_smtp_from_name text DEFAULT 'The Supreme Waffle'
+)
+RETURNS json
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  result json;
+BEGIN
+  IF NOT is_admin() THEN
+    RAISE EXCEPTION 'Admin access required';
+  END IF;
+
+  IF p_smtp_pass IS NOT NULL AND p_smtp_pass <> '' THEN
+    UPDATE site_settings SET
+      smtp_host = p_smtp_host,
+      smtp_port = p_smtp_port,
+      smtp_user = p_smtp_user,
+      smtp_pass = p_smtp_pass,
+      smtp_from_email = COALESCE(NULLIF(p_smtp_from_email, ''), p_smtp_user),
+      smtp_from_name = COALESCE(NULLIF(p_smtp_from_name, ''), 'The Supreme Waffle'),
+      updated_at = now()
+    WHERE id = true;
+  ELSE
+    UPDATE site_settings SET
+      smtp_host = p_smtp_host,
+      smtp_port = p_smtp_port,
+      smtp_user = p_smtp_user,
+      smtp_from_email = COALESCE(NULLIF(p_smtp_from_email, ''), p_smtp_user),
+      smtp_from_name = COALESCE(NULLIF(p_smtp_from_name, ''), 'The Supreme Waffle'),
+      updated_at = now()
+    WHERE id = true;
+  END IF;
+
+  IF NOT FOUND THEN
+    INSERT INTO site_settings (
+      id, smtp_host, smtp_port, smtp_user, smtp_pass,
+      smtp_from_email, smtp_from_name, updated_at
+    ) VALUES (
+      true, p_smtp_host, p_smtp_port, p_smtp_user,
+      COALESCE(p_smtp_pass, ''),
+      COALESCE(NULLIF(p_smtp_from_email, ''), p_smtp_user),
+      COALESCE(NULLIF(p_smtp_from_name, ''), 'The Supreme Waffle'),
+      now()
+    );
+  END IF;
+
+  SELECT json_build_object('success', true) INTO result;
+  RETURN result;
+END;
+$$;
+
+-- END MIGRATION: 20260322120822_secure_smtp_password_and_public_view.sql
+
+-- ===============================================
 -- BEGIN MIGRATION: 20260324120000_add_takeaway_fee_to_orders.sql
 -- ===============================================
+
+/*
+  # Add takeaway fee to orders
+
+  1. Changes
+    - Add `takeaway_fee` to `orders`
+    - Store the extra charge applied to takeaway orders
+*/
 
 DO $$
 BEGIN
@@ -1825,6 +2029,301 @@ BEGIN
 END $$;
 
 -- END MIGRATION: 20260324120000_add_takeaway_fee_to_orders.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260324161500_make_order_ids_sequential.sql
+-- ===============================================
+
+/*
+  # Make order IDs sequential
+
+  1. Database changes
+    - creates `order_id_sequence`
+    - updates `generate_order_id()` to return `SW-1`, `SW-2`, `SW-3`, ...
+    - continues from the highest existing numeric order ID
+
+  2. Notes
+    - existing order IDs stay unchanged
+    - new orders stop using random zero-padded IDs
+*/
+
+CREATE SEQUENCE IF NOT EXISTS public.order_id_sequence
+  AS bigint
+  START WITH 1
+  INCREMENT BY 1;
+
+DO $$
+DECLARE
+  max_existing_order_number bigint;
+BEGIN
+  SELECT COALESCE(MAX((substring(order_id FROM '^SW-([0-9]+)$'))::bigint), 0)
+  INTO max_existing_order_number
+  FROM public.orders;
+
+  IF max_existing_order_number > 0 THEN
+    PERFORM setval('public.order_id_sequence', max_existing_order_number, true);
+  ELSE
+    PERFORM setval('public.order_id_sequence', 1, false);
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.generate_order_id()
+RETURNS text AS $$
+BEGIN
+  RETURN 'SW-' || nextval('public.order_id_sequence')::text;
+END;
+$$ LANGUAGE plpgsql;
+
+ALTER TABLE public.orders
+  ALTER COLUMN order_id SET DEFAULT public.generate_order_id();
+
+-- END MIGRATION: 20260324161500_make_order_ids_sequential.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260324173000_add_has_customizations_to_menu_items.sql
+-- ===============================================
+
+/*
+  # Add has_customizations to menu items
+
+  1. Schema
+    - Add `has_customizations` to `menu_items`
+    - Default to `false`
+
+  2. Data backfill
+    - Enable add-ons for sweet waffle and shake categories
+    - Leave savory categories without add-ons
+*/
+
+ALTER TABLE menu_items
+ADD COLUMN IF NOT EXISTS has_customizations boolean NOT NULL DEFAULT false;
+
+UPDATE menu_items
+SET has_customizations = true
+WHERE category_id IN (
+  'c0000000-0001-0000-0000-000000000001',
+  'c0000000-0001-0000-0000-000000000002',
+  'c0000000-0001-0000-0000-000000000004',
+  'c0000000-0001-0000-0000-000000000005',
+  'c0000000-0001-0000-0000-000000000006'
+);
+
+-- END MIGRATION: 20260324173000_add_has_customizations_to_menu_items.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260325110000_create_customization_group_targets.sql
+-- ===============================================
+
+/*
+  # Create customization group targets
+
+  1. New table
+    - `customization_group_targets`
+    - Assigns a customization group to either a category or a specific menu item
+
+  2. Security
+    - Public read access
+    - Admin CRUD access
+
+  3. Backfill
+    - Attach existing add-on groups to the sweet waffle and shake categories
+*/
+
+CREATE TABLE IF NOT EXISTS customization_group_targets (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  group_id uuid NOT NULL REFERENCES customization_groups(id) ON DELETE CASCADE,
+  category_id uuid REFERENCES categories(id) ON DELETE CASCADE,
+  menu_item_id uuid REFERENCES menu_items(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT customization_group_targets_single_target_check CHECK (
+    (category_id IS NOT NULL AND menu_item_id IS NULL)
+    OR (category_id IS NULL AND menu_item_id IS NOT NULL)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS customization_group_targets_group_category_idx
+  ON customization_group_targets(group_id, category_id)
+  WHERE category_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS customization_group_targets_group_item_idx
+  ON customization_group_targets(group_id, menu_item_id)
+  WHERE menu_item_id IS NOT NULL;
+
+ALTER TABLE customization_group_targets ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public can view customization group targets" ON customization_group_targets;
+DROP POLICY IF EXISTS "Admins can insert customization group targets" ON customization_group_targets;
+DROP POLICY IF EXISTS "Admins can update customization group targets" ON customization_group_targets;
+DROP POLICY IF EXISTS "Admins can delete customization group targets" ON customization_group_targets;
+
+CREATE POLICY "Public can view customization group targets"
+  ON customization_group_targets FOR SELECT TO anon, authenticated
+  USING (true);
+
+CREATE POLICY "Admins can insert customization group targets"
+  ON customization_group_targets FOR INSERT TO authenticated
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM profiles
+      WHERE profiles.id = auth.uid() AND profiles.role = 'admin'
+    )
+  );
+
+CREATE POLICY "Admins can update customization group targets"
+  ON customization_group_targets FOR UPDATE TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM profiles
+      WHERE profiles.id = auth.uid() AND profiles.role = 'admin'
+    )
+  );
+
+CREATE POLICY "Admins can delete customization group targets"
+  ON customization_group_targets FOR DELETE TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM profiles
+      WHERE profiles.id = auth.uid() AND profiles.role = 'admin'
+    )
+  );
+
+INSERT INTO customization_group_targets (group_id, category_id)
+VALUES
+  ('d0000000-0001-0000-0000-000000000001', 'c0000000-0001-0000-0000-000000000001'),
+  ('d0000000-0001-0000-0000-000000000002', 'c0000000-0001-0000-0000-000000000001'),
+  ('d0000000-0001-0000-0000-000000000003', 'c0000000-0001-0000-0000-000000000001'),
+  ('d0000000-0001-0000-0000-000000000001', 'c0000000-0001-0000-0000-000000000002'),
+  ('d0000000-0001-0000-0000-000000000002', 'c0000000-0001-0000-0000-000000000002'),
+  ('d0000000-0001-0000-0000-000000000003', 'c0000000-0001-0000-0000-000000000002'),
+  ('d0000000-0001-0000-0000-000000000001', 'c0000000-0001-0000-0000-000000000004'),
+  ('d0000000-0001-0000-0000-000000000002', 'c0000000-0001-0000-0000-000000000004'),
+  ('d0000000-0001-0000-0000-000000000003', 'c0000000-0001-0000-0000-000000000004'),
+  ('d0000000-0001-0000-0000-000000000001', 'c0000000-0001-0000-0000-000000000005'),
+  ('d0000000-0001-0000-0000-000000000002', 'c0000000-0001-0000-0000-000000000005'),
+  ('d0000000-0001-0000-0000-000000000003', 'c0000000-0001-0000-0000-000000000005'),
+  ('d0000000-0001-0000-0000-000000000001', 'c0000000-0001-0000-0000-000000000006'),
+  ('d0000000-0001-0000-0000-000000000002', 'c0000000-0001-0000-0000-000000000006'),
+  ('d0000000-0001-0000-0000-000000000003', 'c0000000-0001-0000-0000-000000000006')
+ON CONFLICT DO NOTHING;
+
+-- END MIGRATION: 20260325110000_create_customization_group_targets.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260326123000_add_preview_image_to_customization_options.sql
+-- ===============================================
+
+ALTER TABLE customization_options
+ADD COLUMN IF NOT EXISTS preview_image_url text NOT NULL DEFAULT '';
+
+-- END MIGRATION: 20260326123000_add_preview_image_to_customization_options.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260329113000_create_customization_option_preview_overrides.sql
+-- ===============================================
+
+/*
+  # Create customization option preview overrides
+
+  1. New table
+    - `customization_option_preview_overrides`
+    - Stores category-specific preview images for shared add-on options
+
+  2. Security
+    - Public read access
+    - Admin CRUD access
+*/
+
+CREATE TABLE IF NOT EXISTS customization_option_preview_overrides (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  group_id uuid NOT NULL REFERENCES customization_groups(id) ON DELETE CASCADE,
+  option_name text NOT NULL,
+  category_id uuid NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+  preview_image_url text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS customization_option_preview_overrides_group_option_category_idx
+  ON customization_option_preview_overrides(group_id, option_name, category_id);
+
+ALTER TABLE customization_option_preview_overrides ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public can view customization option preview overrides" ON customization_option_preview_overrides;
+DROP POLICY IF EXISTS "Admins can insert customization option preview overrides" ON customization_option_preview_overrides;
+DROP POLICY IF EXISTS "Admins can update customization option preview overrides" ON customization_option_preview_overrides;
+DROP POLICY IF EXISTS "Admins can delete customization option preview overrides" ON customization_option_preview_overrides;
+
+CREATE POLICY "Public can view customization option preview overrides"
+  ON customization_option_preview_overrides FOR SELECT TO anon, authenticated
+  USING (true);
+
+CREATE POLICY "Admins can insert customization option preview overrides"
+  ON customization_option_preview_overrides FOR INSERT TO authenticated
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM profiles
+      WHERE profiles.id = auth.uid() AND profiles.role = 'admin'
+    )
+  );
+
+CREATE POLICY "Admins can update customization option preview overrides"
+  ON customization_option_preview_overrides FOR UPDATE TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM profiles
+      WHERE profiles.id = auth.uid() AND profiles.role = 'admin'
+    )
+  );
+
+CREATE POLICY "Admins can delete customization option preview overrides"
+  ON customization_option_preview_overrides FOR DELETE TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM profiles
+      WHERE profiles.id = auth.uid() AND profiles.role = 'admin'
+    )
+  );
+
+-- END MIGRATION: 20260329113000_create_customization_option_preview_overrides.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260329143000_extend_customization_option_preview_overrides_for_items.sql
+-- ===============================================
+
+/*
+  # Extend customization option preview overrides for item-specific images
+
+  1. Changes
+    - Add `menu_item_id` to `customization_option_preview_overrides`
+    - Allow either `category_id` or `menu_item_id`
+    - Add unique indexes for category-targeted and item-targeted overrides
+*/
+
+ALTER TABLE customization_option_preview_overrides
+ADD COLUMN IF NOT EXISTS menu_item_id uuid REFERENCES menu_items(id) ON DELETE CASCADE;
+
+ALTER TABLE customization_option_preview_overrides
+ALTER COLUMN category_id DROP NOT NULL;
+
+DROP INDEX IF EXISTS customization_option_preview_overrides_group_option_category_idx;
+
+ALTER TABLE customization_option_preview_overrides
+DROP CONSTRAINT IF EXISTS customization_option_preview_overrides_single_target_check;
+
+ALTER TABLE customization_option_preview_overrides
+ADD CONSTRAINT customization_option_preview_overrides_single_target_check CHECK (
+  (category_id IS NOT NULL AND menu_item_id IS NULL)
+  OR (category_id IS NULL AND menu_item_id IS NOT NULL)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS customization_option_preview_overrides_group_option_category_idx
+  ON customization_option_preview_overrides(group_id, option_name, category_id)
+  WHERE category_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS customization_option_preview_overrides_group_option_item_idx
+  ON customization_option_preview_overrides(group_id, option_name, menu_item_id)
+  WHERE menu_item_id IS NOT NULL;
+
+-- END MIGRATION: 20260329143000_extend_customization_option_preview_overrides_for_items.sql
 
 -- ===============================================
 -- BEGIN MIGRATION: 20260330120000_add_display_fields_to_offers.sql
@@ -1980,48 +2479,6 @@ ALTER TABLE offers
 -- END MIGRATION: 20260331120000_add_buy_x_get_y_free_item_offers.sql
 
 -- ===============================================
--- BEGIN MIGRATION: 20260408120000_add_offer_reward_item_source.sql
--- ===============================================
-
-ALTER TABLE offers
-  ADD COLUMN IF NOT EXISTS reward_item_source text NOT NULL DEFAULT 'specific_item';
-
-UPDATE offers
-SET reward_item_source = 'specific_item'
-WHERE reward_item_source IS NULL;
-
-ALTER TABLE offers
-  DROP CONSTRAINT IF EXISTS offers_reward_item_source_check;
-
-ALTER TABLE offers
-  ADD CONSTRAINT offers_reward_item_source_check
-  CHECK (reward_item_source IN ('specific_item', 'qualifying_item'));
-
-ALTER TABLE offers
-  DROP CONSTRAINT IF EXISTS offers_free_item_reward_required_check;
-
-ALTER TABLE offers
-  ADD CONSTRAINT offers_free_item_reward_required_check
-  CHECK (
-    discount_type <> 'free_item'
-    OR reward_item_source = 'qualifying_item'
-    OR reward_menu_item_id IS NOT NULL
-  );
-
-ALTER TABLE offers
-  DROP CONSTRAINT IF EXISTS offers_free_item_matching_source_requires_quantity_trigger_check;
-
-ALTER TABLE offers
-  ADD CONSTRAINT offers_free_item_matching_source_requires_quantity_trigger_check
-  CHECK (
-    discount_type <> 'free_item'
-    OR reward_item_source <> 'qualifying_item'
-    OR trigger_type = 'item_quantity'
-  );
-
--- END MIGRATION: 20260408120000_add_offer_reward_item_source.sql
-
--- ===============================================
 -- BEGIN MIGRATION: 20260331140000_add_offer_cta_text.sql
 -- ===============================================
 
@@ -2033,6 +2490,19 @@ ALTER TABLE offers
 -- ===============================================
 -- BEGIN MIGRATION: 20260401123000_ensure_order_ids_start_at_sw_1.sql
 -- ===============================================
+
+/*
+  # Ensure order IDs start at SW-1
+
+  1. Database changes
+    - normalizes `order_id_sequence` to start at 1 with a floor of 1
+    - syncs the sequence from the highest existing positive `SW-n` order ID
+    - keeps future generated order IDs sequential: `SW-1`, `SW-2`, `SW-3`, ...
+
+  2. Notes
+    - existing historical order IDs are left unchanged
+    - if the only existing order is `SW-0`, the next generated order becomes `SW-1`
+*/
 
 CREATE SEQUENCE IF NOT EXISTS public.order_id_sequence
   AS bigint
@@ -2080,6 +2550,18 @@ ALTER TABLE public.orders
 -- BEGIN MIGRATION: 20260401131500_add_offer_cta_targets.sql
 -- ===============================================
 
+/*
+  # Add offer CTA targets
+
+  1. Database changes
+    - adds CTA target type and optional category/product references to offers
+    - defaults existing offers to opening the full menu
+
+  2. Notes
+    - existing banners keep working as normal menu CTAs
+    - category/product link targets become available in admin after this migration
+*/
+
 ALTER TABLE offers
   ADD COLUMN IF NOT EXISTS cta_target_type text,
   ADD COLUMN IF NOT EXISTS cta_target_category_id uuid REFERENCES categories(id) ON DELETE SET NULL,
@@ -2093,3 +2575,721 @@ ALTER TABLE offers
   ALTER COLUMN cta_target_type SET DEFAULT 'menu';
 
 -- END MIGRATION: 20260401131500_add_offer_cta_targets.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260401170000_add_order_performance_indexes_and_realtime.sql
+-- ===============================================
+
+/*
+  # Reduce order query pressure
+
+  1. Add indexes for the hottest order access patterns
+     - customer history by user and time
+     - kitchen/admin views by status and time
+     - order items by parent order
+  2. Publish order_items to Supabase Realtime
+     - allows kitchen screens to react to inserts without aggressive polling
+*/
+
+CREATE INDEX IF NOT EXISTS orders_user_id_placed_at_idx
+  ON public.orders (user_id, placed_at DESC);
+
+CREATE INDEX IF NOT EXISTS orders_status_placed_at_idx
+  ON public.orders (status, placed_at DESC);
+
+CREATE INDEX IF NOT EXISTS order_items_order_id_idx
+  ON public.order_items (order_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime'
+      AND schemaname = 'public'
+      AND tablename = 'order_items'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE order_items;
+  END IF;
+END $$;
+
+-- END MIGRATION: 20260401170000_add_order_performance_indexes_and_realtime.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260408120000_add_offer_reward_item_source.sql
+-- ===============================================
+
+ALTER TABLE offers
+  ADD COLUMN IF NOT EXISTS reward_item_source text NOT NULL DEFAULT 'specific_item';
+
+UPDATE offers
+SET reward_item_source = 'specific_item'
+WHERE reward_item_source IS NULL;
+
+ALTER TABLE offers
+  DROP CONSTRAINT IF EXISTS offers_reward_item_source_check;
+
+ALTER TABLE offers
+  ADD CONSTRAINT offers_reward_item_source_check
+  CHECK (reward_item_source IN ('specific_item', 'qualifying_item'));
+
+ALTER TABLE offers
+  DROP CONSTRAINT IF EXISTS offers_free_item_reward_required_check;
+
+ALTER TABLE offers
+  ADD CONSTRAINT offers_free_item_reward_required_check
+  CHECK (
+    discount_type <> 'free_item'
+    OR reward_item_source = 'qualifying_item'
+    OR reward_menu_item_id IS NOT NULL
+  );
+
+ALTER TABLE offers
+  DROP CONSTRAINT IF EXISTS offers_free_item_matching_source_requires_quantity_trigger_check;
+
+ALTER TABLE offers
+  ADD CONSTRAINT offers_free_item_matching_source_requires_quantity_trigger_check
+  CHECK (
+    discount_type <> 'free_item'
+    OR reward_item_source <> 'qualifying_item'
+    OR trigger_type = 'item_quantity'
+  );
+
+-- END MIGRATION: 20260408120000_add_offer_reward_item_source.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260413093000_add_counter_payment_capture_fields.sql
+-- ===============================================
+
+/*
+  # Add counter payment capture fields to orders
+
+  1. Changes
+    - Add `counter_payment_method` to `orders`
+    - Add `cash_received_amount` to `orders`
+    - Store how counter payments were collected and how much cash was received
+*/
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'orders'
+      AND column_name = 'counter_payment_method'
+  ) THEN
+    ALTER TABLE public.orders
+      ADD COLUMN counter_payment_method text
+      CHECK (counter_payment_method IN ('cash', 'online'));
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'orders'
+      AND column_name = 'cash_received_amount'
+  ) THEN
+    ALTER TABLE public.orders
+      ADD COLUMN cash_received_amount numeric(10,2);
+  END IF;
+END $$;
+
+-- END MIGRATION: 20260413093000_add_counter_payment_capture_fields.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260413120000_create_item_reviews_and_reward_coupons.sql
+-- ===============================================
+
+/*
+  # Create item reviews and review reward coupons
+
+  1. New tables
+    - `item_reviews`
+      - Stores one review per ordered item line
+    - `review_reward_coupons`
+      - Stores 10% reward coupons earned from item reviews
+
+  2. Orders updates
+    - Adds `review_reward_coupon_id`
+    - Adds `review_reward_discount_amount`
+
+  3. Security
+    - Users can view their own reviews and reward coupons
+    - Staff can also view item reviews
+*/
+
+CREATE TABLE IF NOT EXISTS public.item_reviews (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  order_id uuid NOT NULL REFERENCES public.orders(id) ON DELETE CASCADE,
+  order_item_id uuid NOT NULL REFERENCES public.order_items(id) ON DELETE CASCADE,
+  menu_item_id uuid NOT NULL REFERENCES public.menu_items(id) ON DELETE CASCADE,
+  rating integer NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  comment text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT item_reviews_unique_user_order_item UNIQUE (user_id, order_item_id)
+);
+
+CREATE INDEX IF NOT EXISTS item_reviews_user_created_at_idx
+  ON public.item_reviews (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS item_reviews_order_id_idx
+  ON public.item_reviews (order_id);
+
+CREATE TABLE IF NOT EXISTS public.review_reward_coupons (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  item_review_id uuid NOT NULL UNIQUE REFERENCES public.item_reviews(id) ON DELETE CASCADE,
+  code text NOT NULL UNIQUE,
+  discount_percentage numeric(5,2) NOT NULL DEFAULT 10
+    CHECK (discount_percentage > 0 AND discount_percentage <= 100),
+  is_redeemed boolean NOT NULL DEFAULT false,
+  redeemed_order_id uuid REFERENCES public.orders(id) ON DELETE SET NULL,
+  redeemed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS review_reward_coupons_user_created_at_idx
+  ON public.review_reward_coupons (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS review_reward_coupons_user_redeemed_idx
+  ON public.review_reward_coupons (user_id, is_redeemed, created_at DESC);
+
+ALTER TABLE public.orders
+  ADD COLUMN IF NOT EXISTS review_reward_coupon_id uuid REFERENCES public.review_reward_coupons(id) ON DELETE SET NULL;
+
+ALTER TABLE public.orders
+  ADD COLUMN IF NOT EXISTS review_reward_discount_amount numeric(10,2) NOT NULL DEFAULT 0;
+
+ALTER TABLE public.item_reviews ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.review_reward_coupons ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users and staff can view item reviews" ON public.item_reviews;
+CREATE POLICY "Users and staff can view item reviews"
+  ON public.item_reviews
+  FOR SELECT
+  TO authenticated
+  USING (user_id = auth.uid() OR public.is_staff());
+
+DROP POLICY IF EXISTS "Users can view own review reward coupons" ON public.review_reward_coupons;
+CREATE POLICY "Users can view own review reward coupons"
+  ON public.review_reward_coupons
+  FOR SELECT
+  TO authenticated
+  USING (user_id = auth.uid());
+
+-- END MIGRATION: 20260413120000_create_item_reviews_and_reward_coupons.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260415103000_add_menu_item_inventory_tracking.sql
+-- ===============================================
+
+/*
+  # Add menu item inventory tracking
+
+  1. Menu item changes
+    - Add `manual_availability` to preserve the admin's visibility toggle
+    - Add `track_inventory` to opt items into quantity tracking
+    - Add `available_quantity` for admin-only stock counts
+    - Keep `is_available` as the effective customer-facing availability flag
+
+  2. Order changes
+    - Add `inventory_reserved` so inventory is only restored once
+    - Add `inventory_reservation_items` to store the reserved item quantities per order
+
+  3. Functions
+    - `compute_menu_item_availability(...)`
+    - `reserve_menu_item_inventory(order_id)`
+    - `release_menu_item_inventory(order_id)`
+
+  4. Triggers
+    - Sync effective menu availability whenever menu items change
+    - Restore reserved inventory automatically when orders become cancelled or expired
+*/
+
+ALTER TABLE public.menu_items
+  ADD COLUMN IF NOT EXISTS manual_availability boolean NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS track_inventory boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS available_quantity integer NOT NULL DEFAULT 0;
+
+ALTER TABLE public.menu_items
+  DROP CONSTRAINT IF EXISTS menu_items_available_quantity_check;
+
+ALTER TABLE public.menu_items
+  ADD CONSTRAINT menu_items_available_quantity_check
+  CHECK (available_quantity >= 0);
+
+UPDATE public.menu_items
+SET manual_availability = is_available
+WHERE manual_availability IS DISTINCT FROM is_available;
+
+ALTER TABLE public.orders
+  ADD COLUMN IF NOT EXISTS inventory_reserved boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS inventory_reservation_items jsonb NOT NULL DEFAULT '[]'::jsonb;
+
+CREATE OR REPLACE FUNCTION public.compute_menu_item_availability(
+  p_manual_availability boolean,
+  p_track_inventory boolean,
+  p_available_quantity integer
+)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT COALESCE(p_manual_availability, true)
+    AND (
+      NOT COALESCE(p_track_inventory, false)
+      OR GREATEST(COALESCE(p_available_quantity, 0), 0) > 0
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION public.sync_menu_item_inventory_state()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.manual_availability := COALESCE(NEW.manual_availability, COALESCE(NEW.is_available, true));
+  NEW.track_inventory := COALESCE(NEW.track_inventory, false);
+  NEW.available_quantity := GREATEST(COALESCE(NEW.available_quantity, 0), 0);
+  NEW.is_available := public.compute_menu_item_availability(
+    NEW.manual_availability,
+    NEW.track_inventory,
+    NEW.available_quantity
+  );
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS sync_menu_item_inventory_state_on_write ON public.menu_items;
+
+CREATE TRIGGER sync_menu_item_inventory_state_on_write
+BEFORE INSERT OR UPDATE ON public.menu_items
+FOR EACH ROW
+EXECUTE FUNCTION public.sync_menu_item_inventory_state();
+
+UPDATE public.menu_items
+SET is_available = public.compute_menu_item_availability(
+  manual_availability,
+  track_inventory,
+  available_quantity
+);
+
+CREATE OR REPLACE FUNCTION public.reserve_menu_item_inventory(p_order_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_order record;
+  v_item record;
+  v_reserved_items jsonb := '[]'::jsonb;
+BEGIN
+  SELECT id, inventory_reserved
+  INTO v_order
+  FROM public.orders
+  WHERE id = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Order not found'
+    );
+  END IF;
+
+  IF COALESCE(v_order.inventory_reserved, false) THEN
+    RETURN jsonb_build_object('success', true);
+  END IF;
+
+  FOR v_item IN
+    WITH aggregated_items AS (
+      SELECT
+        oi.menu_item_id,
+        SUM(GREATEST(oi.quantity, 1))::integer AS requested_quantity
+      FROM public.order_items oi
+      WHERE oi.order_id = p_order_id
+      GROUP BY oi.menu_item_id
+    )
+    SELECT
+      mi.id,
+      mi.name,
+      mi.track_inventory,
+      mi.available_quantity,
+      aggregated_items.requested_quantity
+    FROM aggregated_items
+    JOIN public.menu_items mi
+      ON mi.id = aggregated_items.menu_item_id
+    ORDER BY mi.id
+    FOR UPDATE OF mi
+  LOOP
+    IF COALESCE(v_item.track_inventory, false) THEN
+      IF COALESCE(v_item.available_quantity, 0) < COALESCE(v_item.requested_quantity, 0) THEN
+        RETURN jsonb_build_object(
+          'success', false,
+          'error',
+            CASE
+              WHEN COALESCE(v_item.available_quantity, 0) <= 0
+                THEN format('%s is out of stock right now', v_item.name)
+              ELSE format('%s has only %s left right now', v_item.name, v_item.available_quantity)
+            END
+        );
+      END IF;
+
+      v_reserved_items := v_reserved_items || jsonb_build_array(
+        jsonb_build_object(
+          'menu_item_id', v_item.id,
+          'quantity', v_item.requested_quantity
+        )
+      );
+    END IF;
+  END LOOP;
+
+  IF v_reserved_items <> '[]'::jsonb THEN
+    UPDATE public.menu_items mi
+    SET
+      available_quantity = GREATEST(0, mi.available_quantity - reserved_items.requested_quantity),
+      is_available = public.compute_menu_item_availability(
+        mi.manual_availability,
+        mi.track_inventory,
+        GREATEST(0, mi.available_quantity - reserved_items.requested_quantity)
+      )
+    FROM (
+      SELECT
+        (entry->>'menu_item_id')::uuid AS menu_item_id,
+        SUM(GREATEST((entry->>'quantity')::integer, 0))::integer AS requested_quantity
+      FROM jsonb_array_elements(v_reserved_items) entry
+      GROUP BY (entry->>'menu_item_id')::uuid
+    ) reserved_items
+    WHERE mi.id = reserved_items.menu_item_id;
+  END IF;
+
+  UPDATE public.orders
+  SET
+    inventory_reserved = (v_reserved_items <> '[]'::jsonb),
+    inventory_reservation_items = v_reserved_items
+  WHERE id = p_order_id;
+
+  RETURN jsonb_build_object('success', true);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.release_menu_item_inventory(p_order_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_order record;
+BEGIN
+  SELECT id, inventory_reserved, inventory_reservation_items
+  INTO v_order
+  FROM public.orders
+  WHERE id = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('success', true);
+  END IF;
+
+  IF NOT COALESCE(v_order.inventory_reserved, false) THEN
+    RETURN jsonb_build_object('success', true);
+  END IF;
+
+  IF COALESCE(v_order.inventory_reservation_items, '[]'::jsonb) <> '[]'::jsonb THEN
+    UPDATE public.menu_items mi
+    SET
+      available_quantity = GREATEST(0, mi.available_quantity + reserved_items.quantity),
+      is_available = public.compute_menu_item_availability(
+        mi.manual_availability,
+        mi.track_inventory,
+        GREATEST(0, mi.available_quantity + reserved_items.quantity)
+      )
+    FROM (
+      SELECT
+        (entry->>'menu_item_id')::uuid AS menu_item_id,
+        SUM(GREATEST((entry->>'quantity')::integer, 0))::integer AS quantity
+      FROM jsonb_array_elements(COALESCE(v_order.inventory_reservation_items, '[]'::jsonb)) entry
+      GROUP BY (entry->>'menu_item_id')::uuid
+    ) reserved_items
+    WHERE mi.id = reserved_items.menu_item_id;
+  END IF;
+
+  UPDATE public.orders
+  SET
+    inventory_reserved = false,
+    inventory_reservation_items = '[]'::jsonb
+  WHERE id = p_order_id;
+
+  RETURN jsonb_build_object('success', true);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.expire_stale_pending_orders()
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_expired_count integer := 0;
+BEGIN
+  WITH expired_orders AS (
+    UPDATE public.orders
+    SET status = 'expired'
+    WHERE status = 'pending'
+      AND payment_status <> 'paid'
+      AND expires_at <= now()
+    RETURNING 1
+  )
+  SELECT COUNT(*)
+  INTO v_expired_count
+  FROM expired_orders;
+
+  RETURN COALESCE(v_expired_count, 0);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.expire_stale_pending_orders() TO anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.restore_inventory_for_inactive_order()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF COALESCE(NEW.inventory_reserved, false)
+    AND NEW.status IN ('cancelled', 'expired')
+    AND OLD.status IS DISTINCT FROM NEW.status THEN
+    PERFORM public.release_menu_item_inventory(NEW.id);
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS restore_inventory_for_inactive_order_on_write ON public.orders;
+
+CREATE TRIGGER restore_inventory_for_inactive_order_on_write
+AFTER UPDATE ON public.orders
+FOR EACH ROW
+EXECUTE FUNCTION public.restore_inventory_for_inactive_order();
+
+-- END MIGRATION: 20260415103000_add_menu_item_inventory_tracking.sql
+
+-- ===============================================
+-- BEGIN MIGRATION: 20260416120000_add_split_counter_payments_and_staff_order_items.sql
+-- ===============================================
+
+/*
+  # Add split counter payments and staff order item edits
+
+  1. Orders
+    - Allow `counter_payment_method = 'split'`
+    - Add `online_received_amount` for UPI/scanner counter collections
+    - Add `paid_amount` so extra items added after payment only reopen the remaining balance
+
+  2. Staff order edits
+    - Add `add_staff_order_item(...)` RPC for chefs/admins to append simple menu items
+      to active orders and update totals in one database transaction
+*/
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'orders'
+      AND column_name = 'counter_payment_method'
+  ) THEN
+    ALTER TABLE public.orders
+      ADD COLUMN counter_payment_method text;
+  END IF;
+
+  ALTER TABLE public.orders
+    DROP CONSTRAINT IF EXISTS orders_counter_payment_method_check;
+
+  ALTER TABLE public.orders
+    ADD CONSTRAINT orders_counter_payment_method_check
+    CHECK (counter_payment_method IN ('cash', 'online', 'split'));
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'orders'
+      AND column_name = 'cash_received_amount'
+  ) THEN
+    ALTER TABLE public.orders
+      ADD COLUMN cash_received_amount numeric(10,2);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'orders'
+      AND column_name = 'online_received_amount'
+  ) THEN
+    ALTER TABLE public.orders
+      ADD COLUMN online_received_amount numeric(10,2);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'orders'
+      AND column_name = 'paid_amount'
+  ) THEN
+    ALTER TABLE public.orders
+      ADD COLUMN paid_amount numeric(10,2) NOT NULL DEFAULT 0;
+  END IF;
+END $$;
+
+ALTER TABLE public.orders
+  DROP CONSTRAINT IF EXISTS orders_cash_received_amount_nonnegative_check;
+
+ALTER TABLE public.orders
+  ADD CONSTRAINT orders_cash_received_amount_nonnegative_check
+  CHECK (cash_received_amount IS NULL OR cash_received_amount >= 0);
+
+ALTER TABLE public.orders
+  DROP CONSTRAINT IF EXISTS orders_online_received_amount_nonnegative_check;
+
+ALTER TABLE public.orders
+  ADD CONSTRAINT orders_online_received_amount_nonnegative_check
+  CHECK (online_received_amount IS NULL OR online_received_amount >= 0);
+
+ALTER TABLE public.orders
+  DROP CONSTRAINT IF EXISTS orders_paid_amount_nonnegative_check;
+
+ALTER TABLE public.orders
+  ADD CONSTRAINT orders_paid_amount_nonnegative_check
+  CHECK (paid_amount >= 0);
+
+UPDATE public.orders
+SET paid_amount = total
+WHERE payment_status = 'paid'
+  AND COALESCE(paid_amount, 0) = 0;
+
+CREATE OR REPLACE FUNCTION public.add_staff_order_item(
+  p_order_id uuid,
+  p_menu_item_id uuid,
+  p_quantity integer
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_order record;
+  v_menu_item record;
+  v_quantity integer;
+  v_line_total numeric(10,2);
+  v_next_subtotal numeric(10,2);
+  v_next_total numeric(10,2);
+  v_paid_amount numeric(10,2);
+  v_next_payment_status text;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.profiles
+    WHERE id = auth.uid()
+      AND role IN ('chef', 'admin')
+  ) THEN
+    RAISE EXCEPTION 'Staff access required';
+  END IF;
+
+  v_quantity := GREATEST(COALESCE(p_quantity, 1), 1);
+
+  IF v_quantity > 99 THEN
+    RAISE EXCEPTION 'Quantity is too high';
+  END IF;
+
+  SELECT id, subtotal, total, payment_status, paid_amount, status
+  INTO v_order
+  FROM public.orders
+  WHERE id = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found';
+  END IF;
+
+  IF v_order.status IN ('cancelled', 'expired', 'delivered') THEN
+    RAISE EXCEPTION 'Items cannot be added to this order';
+  END IF;
+
+  SELECT id, name, price, is_available
+  INTO v_menu_item
+  FROM public.menu_items
+  WHERE id = p_menu_item_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Menu item not found';
+  END IF;
+
+  IF NOT COALESCE(v_menu_item.is_available, false) THEN
+    RAISE EXCEPTION '% is not currently available', v_menu_item.name;
+  END IF;
+
+  v_line_total := ROUND((COALESCE(v_menu_item.price, 0) * v_quantity)::numeric, 2);
+  v_next_subtotal := ROUND((COALESCE(v_order.subtotal, 0) + v_line_total)::numeric, 2);
+  v_next_total := ROUND((COALESCE(v_order.total, 0) + v_line_total)::numeric, 2);
+  v_paid_amount := CASE
+    WHEN v_order.payment_status = 'paid'
+      THEN GREATEST(COALESCE(v_order.paid_amount, v_order.total, 0), COALESCE(v_order.total, 0))
+    ELSE COALESCE(v_order.paid_amount, 0)
+  END;
+  v_next_payment_status := CASE
+    WHEN v_order.payment_status = 'paid' AND v_line_total > 0 THEN 'pending'
+    ELSE v_order.payment_status
+  END;
+
+  INSERT INTO public.order_items (
+    order_id,
+    menu_item_id,
+    item_name,
+    quantity,
+    unit_price,
+    customizations
+  )
+  VALUES (
+    p_order_id,
+    p_menu_item_id,
+    v_menu_item.name,
+    v_quantity,
+    v_menu_item.price,
+    '[]'::jsonb
+  );
+
+  UPDATE public.orders
+  SET
+    subtotal = v_next_subtotal,
+    total = v_next_total,
+    payment_status = v_next_payment_status,
+    payment_verified_at = CASE
+      WHEN v_next_payment_status = 'pending' THEN NULL
+      ELSE payment_verified_at
+    END,
+    paid_amount = v_paid_amount
+  WHERE id = p_order_id;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'lineTotal', v_line_total,
+    'newTotal', v_next_total,
+    'paymentStatus', v_next_payment_status
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.add_staff_order_item(uuid, uuid, integer) TO authenticated;
+
+-- END MIGRATION: 20260416120000_add_split_counter_payments_and_staff_order_items.sql

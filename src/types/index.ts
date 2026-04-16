@@ -18,6 +18,9 @@ export interface MenuItem {
   is_veg: boolean;
   is_eggless: boolean;
   is_available: boolean;
+  manual_availability?: boolean;
+  track_inventory?: boolean;
+  available_quantity?: number;
   has_customizations?: boolean;
   display_order: number;
 }
@@ -146,7 +149,7 @@ export type OrderType = 'delivery' | 'pickup';
 export type PickupOption = 'dine_in' | 'takeaway';
 export type PaymentMethod = 'upi' | 'card' | 'cod';
 export type PaymentProvider = 'razorpay' | null;
-export type CounterPaymentMethod = 'cash' | 'online';
+export type CounterPaymentMethod = 'cash' | 'online' | 'split';
 
 export interface Order {
   id: string;
@@ -168,6 +171,8 @@ export interface Order {
   payment_status: string;
   counter_payment_method?: CounterPaymentMethod | null;
   cash_received_amount?: number | null;
+  online_received_amount?: number | null;
+  paid_amount?: number | null;
   review_reward_coupon_id?: string | null;
   review_reward_discount_amount?: number | null;
   razorpay_order_id: string | null;

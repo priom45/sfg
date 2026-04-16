@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search, SlidersHorizontal, X, Clock, Sparkles, Flame, ChevronLeft, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { expireStalePendingOrders } from '../lib/inventorySchema';
 import { supabase } from '../lib/supabase';
 import { sortCategoriesForMenu } from '../lib/categoryOrdering';
 import { buildBreadcrumbSchema, buildSchemaGraph, buildSeoUrl, seoDefaultKeywords, seoSiteName } from '../lib/seo';
@@ -98,6 +99,12 @@ export default function MenuPage() {
   const itemParam = searchParams.get('item');
 
   const loadData = useCallback(async () => {
+    try {
+      await expireStalePendingOrders();
+    } catch (error) {
+      console.error('Failed to expire stale pending orders', error);
+    }
+
     const [catRes, itemRes, offerRes, availability] = await Promise.all([
       supabase.from('categories').select('*').order('display_order'),
       supabase.from('menu_items').select('*').eq('is_available', true).order('display_order'),

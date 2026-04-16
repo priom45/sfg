@@ -3,6 +3,7 @@ import { Check, X, ChevronRight, Truck, Store, Filter, Clock, Download, Wallet }
 import { markOrderPaid } from '../../lib/markOrderPaid';
 import { markOrderReady } from '../../lib/markOrderReady';
 import { downloadOrderReceiptPdf } from '../../lib/orderReceiptPdf';
+import { expireStalePendingOrders } from '../../lib/inventorySchema';
 import { supabase } from '../../lib/supabase';
 import { getCompletedOrderLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment, isDineInOrder } from '../../lib/orderLabels';
 import { useToast } from '../../components/Toast';
@@ -146,6 +147,13 @@ export default function AdminOrders() {
   const { showToast } = useToast();
 
   const loadOrders = useCallback(async () => {
+    try {
+      await expireStalePendingOrders();
+    } catch (error) {
+      console.error('Failed to expire stale pending orders', error);
+      showToast(error instanceof Error ? error.message : 'Failed to refresh pending order status', 'error');
+    }
+
     const { data, error } = await supabase
       .from('orders')
       .select('*')
