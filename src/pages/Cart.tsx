@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Minus, Plus, Trash2, ShoppingBag, ArrowLeft, Tag, User, Pencil, Store, Wallet, CreditCard, Gift, QrCode } from 'lucide-react';
+import { Minus, Plus, Trash2, ShoppingBag, ArrowLeft, Tag, User, Pencil, Store, Wallet, CreditCard, Gift } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useCart } from '../contexts/CartContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -1242,7 +1242,7 @@ export default function CartPage() {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <button
                 onClick={() => setPaymentMethod('card')}
                 className={`relative flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all text-center ${
@@ -1260,26 +1260,6 @@ export default function CartPage() {
                   <span className={`text-[14px] font-bold block ${paymentMethod === 'card' ? 'text-white' : 'text-brand-text-muted'}`}>Pay Online</span>
                   <span className="text-[11px] text-brand-text-dim">
                     UPI, cards, and more with Razorpay
-                  </span>
-                </div>
-              </button>
-              <button
-                onClick={() => setPaymentMethod('upi')}
-                className={`relative flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all text-center ${
-                  paymentMethod === 'upi'
-                    ? 'border-brand-gold bg-brand-gold/10'
-                    : 'border-brand-border bg-brand-surface hover:border-brand-border'
-                }`}
-              >
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                  paymentMethod === 'upi' ? 'bg-brand-gold/20' : 'bg-brand-surface-light'
-                }`}>
-                  <QrCode size={20} className={paymentMethod === 'upi' ? 'text-brand-gold' : 'text-brand-text-dim'} />
-                </div>
-                <div>
-                  <span className={`text-[14px] font-bold block ${paymentMethod === 'upi' ? 'text-white' : 'text-brand-text-muted'}`}>UPI Scanner</span>
-                  <span className="text-[11px] text-brand-text-dim">
-                    {pickupOption === 'dine_in' ? 'Scan while dining' : 'Scan at collection'}
                   </span>
                 </div>
               </button>
