@@ -98,8 +98,8 @@ let razorpayScriptPromise: Promise<void> | null = null;
 const MISSING_RAZORPAY_FUNCTIONS_MESSAGE =
   'Online payment is not enabled on this Supabase project yet. Deploy the Razorpay Edge Functions first.';
 export const RAZORPAY_BRAND_IMAGE =
-  typeof window === 'undefined'
-    ? '/razorpay-logo-badge.svg'
+  typeof window === 'undefined' || /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(window.location.hostname)
+    ? undefined
     : new URL('/razorpay-logo-badge.svg', window.location.origin).toString();
 
 function getSupabaseFunctionsBaseUrl() {
