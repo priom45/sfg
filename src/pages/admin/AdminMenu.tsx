@@ -66,6 +66,10 @@ function getManualAvailability(item: MenuItem) {
   return item.manual_availability ?? item.is_available;
 }
 
+function shouldShowInStockTracking(item: MenuItem) {
+  return getManualAvailability(item);
+}
+
 function getTrackInventory(item: MenuItem) {
   return item.track_inventory === true;
 }
@@ -264,8 +268,10 @@ export default function AdminMenu() {
     return a.display_order - b.display_order;
   });
 
-  const trackedItems = sortedItems.filter(getTrackInventory);
-  const untrackedItems = sortedItems.filter((item) => !getTrackInventory(item));
+  const stockTrackingItems = sortedItems.filter(shouldShowInStockTracking);
+  const hiddenFromStockTrackingItems = sortedItems.filter((item) => !shouldShowInStockTracking(item));
+  const trackedItems = stockTrackingItems.filter(getTrackInventory);
+  const untrackedItems = stockTrackingItems.filter((item) => !getTrackInventory(item));
   const lowStockItems = trackedItems.filter((item) => {
     const quantity = getAvailableQuantity(item);
     return quantity > 0 && quantity <= 5;
@@ -624,7 +630,7 @@ export default function AdminMenu() {
           <div>
             <h2 className="text-lg font-bold text-white">Stock Tracking</h2>
             <p className="mt-1 text-sm text-brand-text-muted">
-              Track item quantities here. Products with zero tracked stock are hidden from customers automatically.
+              Track menu item quantities here. Products hidden manually are kept out of this stock list.
             </p>
           </div>
           {!inventorySchemaReady && (
@@ -636,7 +642,7 @@ export default function AdminMenu() {
 
         <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
           {[
-            { label: 'Products', value: items.length, className: 'border-sky-500/20 bg-sky-500/10 text-sky-300' },
+            { label: 'Menu Products', value: stockTrackingItems.length, className: 'border-sky-500/20 bg-sky-500/10 text-sky-300' },
             { label: 'Tracked', value: trackedItems.length, className: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' },
             { label: 'Low Stock', value: lowStockItems.length, className: 'border-amber-500/20 bg-amber-500/10 text-amber-300' },
             { label: 'Out', value: outOfStockItems.length, className: 'border-red-500/20 bg-red-500/10 text-red-300' },
@@ -650,6 +656,11 @@ export default function AdminMenu() {
 
         <div className="mb-4 rounded-lg border border-brand-border bg-brand-bg/40 px-3 py-2 text-sm text-brand-text-muted">
           Total tracked stock: <span className="font-bold text-white">{totalTrackedQuantity}</span> item{totalTrackedQuantity === 1 ? '' : 's'}
+          {hiddenFromStockTrackingItems.length > 0 && (
+            <span className="ml-2 text-xs text-brand-text-dim">
+              {hiddenFromStockTrackingItems.length} hidden product{hiddenFromStockTrackingItems.length === 1 ? '' : 's'} excluded
+            </span>
+          )}
         </div>
 
         {trackedItems.length === 0 ? (
