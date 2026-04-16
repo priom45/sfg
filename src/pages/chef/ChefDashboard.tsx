@@ -531,10 +531,10 @@ export default function ChefDashboard() {
     .sort((a, b) => getDoneOrderTime(b) - getDoneOrderTime(a));
 
   const tabs: { key: Tab; label: string; count: number; icon: typeof Clock }[] = [
+    { key: 'payments', label: 'Payments', count: paymentOrders.length, icon: Wallet },
     { key: 'queue', label: 'Queue', count: queueOrders.length, icon: Users },
     { key: 'preparing', label: 'Preparing', count: preparingOrders.length, icon: Flame },
     { key: 'done', label: 'Done', count: todayDone.length, icon: Check },
-    { key: 'payments', label: 'Payments', count: paymentOrders.length, icon: Wallet },
   ];
 
   const displayOrders = tab === 'payments'

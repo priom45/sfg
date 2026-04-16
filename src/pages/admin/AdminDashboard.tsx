@@ -108,26 +108,48 @@ function getPaymentChannel(order: Order): 'cash' | 'online' | 'split' | null {
   return null;
 }
 
+function getRecordedCollectionAmount(value: number | string | null | undefined) {
+  const amount = Number(value ?? 0);
+  return Number.isFinite(amount) && amount > 0 ? amount : 0;
+}
+
 function getCollectionParts(order: Order) {
   const amount = Number(order.total || 0);
-  const channel = getPaymentChannel(order);
 
-  if (!Number.isFinite(amount) || amount <= 0 || !channel) {
+  if (!Number.isFinite(amount) || amount <= 0) {
     return { cash: 0, online: 0, total: 0 };
   }
 
-  if (channel === 'split') {
-    const recordedOnline = Number(order.online_received_amount || 0);
-    const online = Math.min(amount, Number.isFinite(recordedOnline) ? Math.max(0, recordedOnline) : 0);
+  const channel = getPaymentChannel(order);
+  const recordedCash = getRecordedCollectionAmount(order.cash_received_amount);
+  const recordedOnline = getRecordedCollectionAmount(order.online_received_amount);
+
+  if (recordedCash > 0 || recordedOnline > 0) {
+    let online = Math.min(amount, recordedOnline);
+    let cash = Math.min(Math.max(0, amount - online), recordedCash);
+    const unassigned = Math.max(0, amount - online - cash);
+
+    if (unassigned > 0) {
+      if (channel === 'online') {
+        online += unassigned;
+      } else {
+        cash += unassigned;
+      }
+    }
+
     return {
-      cash: Math.max(0, amount - online),
+      cash,
       online,
       total: amount,
     };
   }
 
+  if (!channel) {
+    return { cash: 0, online: 0, total: 0 };
+  }
+
   return {
-    cash: channel === 'cash' ? amount : 0,
+    cash: channel === 'cash' || channel === 'split' ? amount : 0,
     online: channel === 'online' ? amount : 0,
     total: amount,
   };
