@@ -122,6 +122,7 @@ type RefreshmentSuggestion = {
   menuItem: OfferMenuCatalogItem;
   reason: string | null;
 };
+type CheckoutStep = 'service' | 'payment';
 
 function getPromoRewardSummary(items: OfferRewardItem[]) {
   return items.map((item) => `${item.quantity}x ${item.item_name}`).join(', ');
@@ -176,6 +177,7 @@ export default function CartPage() {
   const [phone, setPhone] = useState('');
   const [pickupOption, setPickupOption] = useState<PickupOption>('dine_in');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('card');
+  const [checkoutStep, setCheckoutStep] = useState<CheckoutStep | null>(null);
   const [activeOffers, setActiveOffers] = useState<Offer[]>([]);
   const [couponCode, setCouponCode] = useState('');
   const [appliedOffer, setAppliedOffer] = useState<Offer | null>(null);
@@ -388,13 +390,15 @@ export default function CartPage() {
   ];
   const featuredAutomaticOffer = selectedAutomaticOffer?.offer || applicableAutomaticOffers[0]?.offer || activeOffers.find((offer) => getOfferMode(offer) === 'automatic') || null;
   const discount = Math.min(subtotal, couponDiscount + automaticDiscount + reviewRewardDiscount);
+  function getTotalForPickupOption(option: PickupOption) {
+    const optionTakeawayFee = option === 'takeaway' ? TAKEAWAY_CHARGE : 0;
+    return Math.max(0, subtotal - discount) + optionTakeawayFee;
+  }
   const takeawayFee = pickupOption === 'takeaway' ? TAKEAWAY_CHARGE : 0;
-  const total = Math.max(0, subtotal - discount) + takeawayFee;
+  const total = getTotalForPickupOption(pickupOption);
   const isFreeOrder = total <= 0;
   const automaticOfferApplied = automaticDiscount > 0 || automaticRewardItems.length > 0;
   const multipleAutomaticOffersAvailable = applicableAutomaticOffers.length > 1;
-  const serviceModeLabel = getServiceModeLabel({ order_type: 'pickup', pickup_option: pickupOption });
-
   useEffect(() => {
     if (applicableAutomaticOffers.length === 0) {
       if (selectedAutomaticOfferId !== null) {
@@ -522,16 +526,17 @@ export default function CartPage() {
     navigate(`/order-success/${orderId}`, { replace: true });
   }
 
-  async function startRazorpayCheckout(customerEmail: string) {
+  async function startRazorpayCheckout(customerEmail: string, checkoutPickupOption: PickupOption, checkoutTotal: number) {
     const razorpayScriptPromise = loadRazorpayScript();
+    const checkoutServiceModeLabel = getServiceModeLabel({ order_type: 'pickup', pickup_option: checkoutPickupOption });
     const razorpayOrder = await createRazorpayOrder({
       customerName: name.trim(),
       customerPhone: phone.trim(),
       customerEmail,
-      pickupOption,
+      pickupOption: checkoutPickupOption,
       subtotal,
       discount,
-      total,
+      total: checkoutTotal,
       reviewRewardCouponId: selectedReviewRewardCoupon?.id,
       reviewRewardDiscountAmount: reviewRewardDiscount,
       items: checkoutItems,
@@ -580,7 +585,7 @@ export default function CartPage() {
           currency: razorpayOrder.currency,
           name: 'The Supreme Waffle',
           image: RAZORPAY_BRAND_IMAGE,
-          description: `${serviceModeLabel} Order`,
+          description: `${checkoutServiceModeLabel} Order`,
           order_id: razorpayOrder.razorpayOrderId,
           prefill: {
             name: razorpayOrder.customerName,
@@ -670,32 +675,82 @@ export default function CartPage() {
     }
   }
 
-  async function handlePlaceOrder() {
+  function validateCheckoutStart() {
     if (settings && !settings.site_is_open) {
       showToast(settings.reopening_text || 'Ordering is currently unavailable', 'error');
-      return;
+      return false;
     }
 
     if (!user) {
       navigate('/auth', { state: { from: '/cart' } });
-      return;
+      return false;
     }
 
     if (!name.trim() || !phone.trim()) {
       showToast('Please fill in your name and phone number', 'error');
+      return false;
+    }
+
+    return true;
+  }
+
+  function handleCheckoutStart() {
+    if (submitting || !validateCheckoutStart()) {
+      return;
+    }
+
+    setCheckoutStep('service');
+  }
+
+  function closeCheckoutFlow() {
+    if (!submitting) {
+      setCheckoutStep(null);
+    }
+  }
+
+  function handlePickupChoice(option: PickupOption) {
+    if (submitting || !validateCheckoutStart()) {
+      return;
+    }
+
+    setPickupOption(option);
+
+    if (getTotalForPickupOption(option) <= 0) {
+      setCheckoutStep(null);
+      void submitCheckout(option, paymentMethod);
+      return;
+    }
+
+    setCheckoutStep('payment');
+  }
+
+  function handlePaymentChoice(method: PaymentMethod) {
+    if (submitting || !validateCheckoutStart()) {
+      return;
+    }
+
+    setPaymentMethod(method);
+    setCheckoutStep(null);
+    void submitCheckout(pickupOption, method);
+  }
+
+  async function submitCheckout(checkoutPickupOption = pickupOption, checkoutPaymentMethod = paymentMethod) {
+    if (!validateCheckoutStart()) {
       return;
     }
 
     setSubmitting(true);
 
     try {
+      const checkoutTotal = getTotalForPickupOption(checkoutPickupOption);
+      const checkoutIsFreeOrder = checkoutTotal <= 0;
       const customerEmail = getCustomerEmail();
       void syncProfileDetails().catch((error) => {
         console.error('Failed to sync profile details during checkout', error);
       });
 
-      if (paymentMethod === 'card' && !isFreeOrder) {
-        await startRazorpayCheckout(customerEmail);
+      if (checkoutPaymentMethod === 'card' && !checkoutIsFreeOrder) {
+        await startRazorpayCheckout(customerEmail, checkoutPickupOption, checkoutTotal);
         return;
       }
 
@@ -703,11 +758,11 @@ export default function CartPage() {
         customerName: name.trim(),
         customerPhone: phone.trim(),
         customerEmail,
-        pickupOption,
+        pickupOption: checkoutPickupOption,
         subtotal,
         discount,
-        total,
-        paymentMethod,
+        total: checkoutTotal,
+        paymentMethod: checkoutPaymentMethod,
         reviewRewardCouponId: selectedReviewRewardCoupon?.id,
         reviewRewardDiscountAmount: reviewRewardDiscount,
         items: checkoutItems,
@@ -946,7 +1001,7 @@ export default function CartPage() {
           </Link>
           <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-bold bg-brand-gold/10 text-brand-gold border border-brand-gold/20">
             <Store size={12} strokeWidth={2.5} />
-            {serviceModeLabel} Order
+            Pickup Order
           </div>
         </div>
 
@@ -1183,108 +1238,11 @@ export default function CartPage() {
           </div>
         )}
 
-        <div className="mb-4">
-          <h3 className="font-bold text-white text-[14px] mb-3">How would you like this order?</h3>
-          <div className="grid grid-cols-2 gap-2.5">
-            <button
-              onClick={() => setPickupOption('dine_in')}
-              className={`relative flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all text-center ${
-                pickupOption === 'dine_in'
-                  ? 'border-brand-gold bg-brand-gold/10'
-                  : 'border-brand-border bg-brand-surface hover:border-brand-border'
-              }`}
-            >
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                pickupOption === 'dine_in' ? 'bg-brand-gold/20' : 'bg-brand-surface-light'
-              }`}>
-                <Store size={20} className={pickupOption === 'dine_in' ? 'text-brand-gold' : 'text-brand-text-dim'} />
-              </div>
-              <div>
-                <span className={`text-[14px] font-bold block ${pickupOption === 'dine_in' ? 'text-white' : 'text-brand-text-muted'}`}>Dine In</span>
-                <span className="text-[11px] text-brand-text-dim">Enjoy it at the shop</span>
-              </div>
-            </button>
-            <button
-              onClick={() => setPickupOption('takeaway')}
-              className={`relative flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all text-center ${
-                pickupOption === 'takeaway'
-                  ? 'border-brand-gold bg-brand-gold/10'
-                  : 'border-brand-border bg-brand-surface hover:border-brand-border'
-              }`}
-            >
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                pickupOption === 'takeaway' ? 'bg-brand-gold/20' : 'bg-brand-surface-light'
-              }`}>
-                <ShoppingBag size={20} className={pickupOption === 'takeaway' ? 'text-brand-gold' : 'text-brand-text-dim'} />
-              </div>
-              <div>
-                <span className={`text-[14px] font-bold block ${pickupOption === 'takeaway' ? 'text-white' : 'text-brand-text-muted'}`}>Takeaway</span>
-                <span className="text-[11px] text-brand-text-dim">Pack it to go + ₹{TAKEAWAY_CHARGE}</span>
-              </div>
-            </button>
-          </div>
-        </div>
-
-        <div className="mb-4">
-          <h3 className="font-bold text-white text-[14px] mb-3">
-            {isFreeOrder ? 'Payment covered by offer' : 'How would you like to settle payment?'}
-          </h3>
-          {isFreeOrder ? (
-            <div className="rounded-xl border-2 border-emerald-500/30 bg-emerald-500/10 p-4 text-center">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center mx-auto bg-emerald-500/20 mb-2">
-                <Tag size={20} className="text-emerald-400" />
-              </div>
-              <div>
-                <span className="text-[14px] font-bold block text-white">Free Order</span>
-                <span className="text-[11px] text-emerald-300">
-                  Coupon covered the full amount. No payment is required.
-                </span>
-              </div>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <button
-                onClick={() => setPaymentMethod('card')}
-                className={`relative flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all text-center ${
-                  paymentMethod === 'card'
-                    ? 'border-brand-gold bg-brand-gold/10'
-                    : 'border-brand-border bg-brand-surface hover:border-brand-border'
-                }`}
-              >
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                  paymentMethod === 'card' ? 'bg-brand-gold/20' : 'bg-brand-surface-light'
-                }`}>
-                  <CreditCard size={20} className={paymentMethod === 'card' ? 'text-brand-gold' : 'text-brand-text-dim'} />
-                </div>
-                <div>
-                  <span className={`text-[14px] font-bold block ${paymentMethod === 'card' ? 'text-white' : 'text-brand-text-muted'}`}>Pay Online</span>
-                  <span className="text-[11px] text-brand-text-dim">
-                    UPI, cards, and more with Razorpay
-                  </span>
-                </div>
-              </button>
-              <button
-                onClick={() => setPaymentMethod('cod')}
-                className={`relative flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all text-center ${
-                  paymentMethod === 'cod'
-                    ? 'border-brand-gold bg-brand-gold/10'
-                    : 'border-brand-border bg-brand-surface hover:border-brand-border'
-                }`}
-              >
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                  paymentMethod === 'cod' ? 'bg-brand-gold/20' : 'bg-brand-surface-light'
-                }`}>
-                  <Wallet size={20} className={paymentMethod === 'cod' ? 'text-brand-gold' : 'text-brand-text-dim'} />
-                </div>
-                <div>
-                  <span className={`text-[14px] font-bold block ${paymentMethod === 'cod' ? 'text-white' : 'text-brand-text-muted'}`}>Cash Counter</span>
-                  <span className="text-[11px] text-brand-text-dim">
-                    {pickupOption === 'dine_in' ? 'Hand cash while dining' : 'Hand cash at collection'}
-                  </span>
-                </div>
-              </button>
-            </div>
-          )}
+        <div className="bg-brand-surface rounded-xl p-4 border border-brand-border mb-4">
+          <h3 className="font-bold text-white text-[14px] mb-1">Checkout choices</h3>
+          <p className="text-[12px] text-brand-text-dim">
+            Tap Proceed to choose Dine In or Takeaway first, then choose payment.
+          </p>
         </div>
 
         <div className="bg-brand-surface rounded-xl p-4 border border-brand-border mb-4">
@@ -1486,7 +1444,7 @@ export default function CartPage() {
         <div className="cart-submit-bar">
           <div className="max-w-lg mx-auto">
             <motion.button
-              onClick={handlePlaceOrder}
+              onClick={handleCheckoutStart}
               disabled={submitting || !!(settings && !settings.site_is_open)}
               whileTap={{ scale: 0.97 }}
               animate={submitting ? { boxShadow: ['0 0 0 0 rgba(216,178,78,0)', '0 0 16px 4px rgba(216,178,78,0.2)', '0 0 0 0 rgba(216,178,78,0)'] } : {}}
@@ -1499,13 +1457,28 @@ export default function CartPage() {
                 ? settings.reopening_text || 'Orders Closed'
                 : submitting
                 ? paymentMethod === 'card' && !isFreeOrder ? 'Opening Payment...' : 'Placing Order...'
-                : isFreeOrder
-                ? 'Proceed to Checkout • FREE'
-                : <>Proceed to Checkout • {'\u20B9'}{total.toFixed(0)}</>}
+                : 'Proceed to Checkout'}
             </motion.button>
           </div>
         </div>
       </motion.div>
+
+      <AnimatePresence>
+        {checkoutStep && (
+          <CheckoutFlowModal
+            step={checkoutStep}
+            pickupOption={pickupOption}
+            paymentMethod={paymentMethod}
+            total={total}
+            isFreeOrder={isFreeOrder}
+            submitting={submitting}
+            onClose={closeCheckoutFlow}
+            onBack={() => setCheckoutStep('service')}
+            onSelectPickupOption={handlePickupChoice}
+            onSelectPaymentMethod={handlePaymentChoice}
+          />
+        )}
+      </AnimatePresence>
 
       {editingItem && (
         <CustomizationModal
@@ -1530,6 +1503,186 @@ export default function CartPage() {
         />
       )}
     </div>
+  );
+}
+
+function CheckoutFlowModal({
+  step,
+  pickupOption,
+  paymentMethod,
+  total,
+  isFreeOrder,
+  submitting,
+  onClose,
+  onBack,
+  onSelectPickupOption,
+  onSelectPaymentMethod,
+}: {
+  step: CheckoutStep;
+  pickupOption: PickupOption;
+  paymentMethod: PaymentMethod;
+  total: number;
+  isFreeOrder: boolean;
+  submitting: boolean;
+  onClose: () => void;
+  onBack: () => void;
+  onSelectPickupOption: (option: PickupOption) => void;
+  onSelectPaymentMethod: (method: PaymentMethod) => void;
+}) {
+  const serviceModeLabel = getServiceModeLabel({ order_type: 'pickup', pickup_option: pickupOption });
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[90] flex items-end justify-center bg-black/70 px-4 py-6 sm:items-center"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ opacity: 0, y: 24, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 24, scale: 0.98 }}
+        transition={{ duration: 0.18 }}
+        className="w-full max-w-md rounded-2xl border border-brand-border bg-brand-bg p-5 shadow-elevated"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-[0.24em] text-brand-gold">
+              Step {step === 'service' ? '1 of 2' : '2 of 2'}
+            </p>
+            <h2 className="mt-1 text-xl font-extrabold tracking-tight text-white">
+              {step === 'service' ? 'Choose order type' : 'Choose payment'}
+            </h2>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={submitting}
+            className="rounded-lg border border-brand-border px-3 py-1.5 text-[12px] font-bold text-brand-text-muted transition-colors hover:border-red-500/30 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Close
+          </button>
+        </div>
+
+        {step === 'service' ? (
+          <div className="space-y-3">
+            <p className="text-[13px] font-medium text-brand-text-muted">
+              Pick Dine In or Takeaway first. Payment comes next.
+            </p>
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                onClick={() => onSelectPickupOption('dine_in')}
+                disabled={submitting}
+                className={`flex min-h-[128px] flex-col items-center justify-center gap-2 rounded-xl border-2 p-4 text-center transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
+                  pickupOption === 'dine_in'
+                    ? 'border-brand-gold bg-brand-gold/10'
+                    : 'border-brand-border bg-brand-surface hover:border-brand-gold/40'
+                }`}
+              >
+                <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${
+                  pickupOption === 'dine_in' ? 'bg-brand-gold/20' : 'bg-brand-surface-light'
+                }`}>
+                  <Store size={20} className={pickupOption === 'dine_in' ? 'text-brand-gold' : 'text-brand-text-dim'} />
+                </div>
+                <span className={`block text-[14px] font-bold ${pickupOption === 'dine_in' ? 'text-white' : 'text-brand-text-muted'}`}>
+                  Dine In
+                </span>
+                <span className="text-[11px] text-brand-text-dim">Eat at the shop</span>
+              </button>
+              <button
+                onClick={() => onSelectPickupOption('takeaway')}
+                disabled={submitting}
+                className={`flex min-h-[128px] flex-col items-center justify-center gap-2 rounded-xl border-2 p-4 text-center transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
+                  pickupOption === 'takeaway'
+                    ? 'border-brand-gold bg-brand-gold/10'
+                    : 'border-brand-border bg-brand-surface hover:border-brand-gold/40'
+                }`}
+              >
+                <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${
+                  pickupOption === 'takeaway' ? 'bg-brand-gold/20' : 'bg-brand-surface-light'
+                }`}>
+                  <ShoppingBag size={20} className={pickupOption === 'takeaway' ? 'text-brand-gold' : 'text-brand-text-dim'} />
+                </div>
+                <span className={`block text-[14px] font-bold ${pickupOption === 'takeaway' ? 'text-white' : 'text-brand-text-muted'}`}>
+                  Takeaway
+                </span>
+                <span className="text-[11px] text-brand-text-dim">Pack it to go + ₹{TAKEAWAY_CHARGE}</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <button
+              onClick={onBack}
+              disabled={submitting}
+              className="text-[13px] font-bold text-brand-gold transition-colors hover:text-brand-gold-soft disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Back to order type
+            </button>
+            <div className="rounded-xl border border-brand-border bg-brand-surface px-4 py-3">
+              <div className="flex items-center justify-between gap-3 text-[13px]">
+                <span className="font-semibold text-brand-text-muted">{serviceModeLabel}</span>
+                <span className="font-black text-brand-gold tabular-nums">₹{total.toFixed(0)}</span>
+              </div>
+            </div>
+
+            {isFreeOrder ? (
+              <button
+                onClick={() => onSelectPaymentMethod(paymentMethod)}
+                disabled={submitting}
+                className="btn-primary w-full rounded-xl py-3 text-[14px] font-black disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Place Free Order
+              </button>
+            ) : (
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <button
+                  onClick={() => onSelectPaymentMethod('card')}
+                  disabled={submitting}
+                  className={`flex min-h-[132px] flex-col items-center justify-center gap-2 rounded-xl border-2 p-4 text-center transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
+                    paymentMethod === 'card'
+                      ? 'border-brand-gold bg-brand-gold/10'
+                      : 'border-brand-border bg-brand-surface hover:border-brand-gold/40'
+                  }`}
+                >
+                  <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${
+                    paymentMethod === 'card' ? 'bg-brand-gold/20' : 'bg-brand-surface-light'
+                  }`}>
+                    <CreditCard size={20} className={paymentMethod === 'card' ? 'text-brand-gold' : 'text-brand-text-dim'} />
+                  </div>
+                  <span className={`block text-[14px] font-bold ${paymentMethod === 'card' ? 'text-white' : 'text-brand-text-muted'}`}>
+                    Pay Online
+                  </span>
+                  <span className="text-[11px] text-brand-text-dim">UPI, cards, and more</span>
+                </button>
+                <button
+                  onClick={() => onSelectPaymentMethod('cod')}
+                  disabled={submitting}
+                  className={`flex min-h-[132px] flex-col items-center justify-center gap-2 rounded-xl border-2 p-4 text-center transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
+                    paymentMethod === 'cod'
+                      ? 'border-brand-gold bg-brand-gold/10'
+                      : 'border-brand-border bg-brand-surface hover:border-brand-gold/40'
+                  }`}
+                >
+                  <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${
+                    paymentMethod === 'cod' ? 'bg-brand-gold/20' : 'bg-brand-surface-light'
+                  }`}>
+                    <Wallet size={20} className={paymentMethod === 'cod' ? 'text-brand-gold' : 'text-brand-text-dim'} />
+                  </div>
+                  <span className={`block text-[14px] font-bold ${paymentMethod === 'cod' ? 'text-white' : 'text-brand-text-muted'}`}>
+                    Cash Counter
+                  </span>
+                  <span className="text-[11px] text-brand-text-dim">
+                    {pickupOption === 'dine_in' ? 'Hand cash while dining' : 'Hand cash at collection'}
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
   );
 }
 
