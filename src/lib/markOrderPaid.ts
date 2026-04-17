@@ -33,22 +33,32 @@ type DirectPaymentOrder = {
   payment_status: string | null;
   payment_provider: string | null;
   payment_method: string | null;
-  counter_payment_method: CounterPaymentMethod | null;
-  cash_received_amount: number | string | null;
-  online_received_amount: number | string | null;
-  paid_amount: number | string | null;
+  counter_payment_method?: CounterPaymentMethod | null;
+  cash_received_amount?: number | string | null;
+  online_received_amount?: number | string | null;
+  paid_amount?: number | string | null;
+  supportsCounterPaymentCapture: boolean;
 };
 
 type PaymentUpdatePayload = {
   payment_status: 'paid';
   payment_verified_at: string;
-  paid_amount: number;
+  paid_amount?: number;
   payment_method?: 'cod' | 'upi';
   payment_provider?: null;
   counter_payment_method?: CounterPaymentMethod;
   cash_received_amount?: number | null;
   online_received_amount?: number | null;
 };
+
+const BASE_PAYMENT_ORDER_SELECT = 'id, order_id, total, payment_status, payment_provider, payment_method';
+const COUNTER_PAYMENT_ORDER_SELECT = `${BASE_PAYMENT_ORDER_SELECT}, counter_payment_method, cash_received_amount, online_received_amount, paid_amount`;
+const COUNTER_PAYMENT_CAPTURE_COLUMNS = [
+  'counter_payment_method',
+  'cash_received_amount',
+  'online_received_amount',
+  'paid_amount',
+];
 
 function roundCurrency(value: number) {
   return Math.round(value * 100) / 100;
@@ -60,6 +70,62 @@ function getCounterPaymentMethod(value: CounterPaymentMethod | undefined, fallba
   }
 
   return fallbackMethod === 'upi' ? 'online' : 'cash';
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    return typeof message === 'string' ? message : String(message);
+  }
+
+  return String(error);
+}
+
+function getErrorCode(error: unknown) {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    return typeof code === 'string' ? code : undefined;
+  }
+
+  return undefined;
+}
+
+function isCounterPaymentCaptureSchemaError(error: unknown) {
+  const message = getErrorMessage(error);
+  const code = getErrorCode(error);
+
+  return (
+    code === '42703' ||
+    code === 'PGRST204' ||
+    /column .* does not exist/i.test(message) ||
+    /could not find .* column/i.test(message)
+  ) && COUNTER_PAYMENT_CAPTURE_COLUMNS.some((column) => message.includes(column));
+}
+
+function withCounterPaymentDefaults(
+  order: Omit<DirectPaymentOrder, 'supportsCounterPaymentCapture'>,
+  supportsCounterPaymentCapture: boolean,
+): DirectPaymentOrder {
+  return {
+    ...order,
+    counter_payment_method: order.counter_payment_method ?? null,
+    cash_received_amount: order.cash_received_amount ?? null,
+    online_received_amount: order.online_received_amount ?? null,
+    paid_amount: order.paid_amount ?? null,
+    supportsCounterPaymentCapture,
+  };
+}
+
+function getBasePaymentUpdate(paymentUpdate: PaymentUpdatePayload): PaymentUpdatePayload {
+  const basePaymentUpdate = { ...paymentUpdate };
+  delete basePaymentUpdate.counter_payment_method;
+  delete basePaymentUpdate.cash_received_amount;
+  delete basePaymentUpdate.online_received_amount;
+  delete basePaymentUpdate.paid_amount;
+
+  return basePaymentUpdate;
 }
 
 async function ensureFreshPaidStatusSession(forceRefresh = false) {
@@ -137,17 +203,33 @@ function isUnauthorizedFunctionError(error: unknown) {
 async function fetchDirectPaymentOrder(orderId: string) {
   const { data: order, error: orderError } = await staffSupabase
     .from('orders')
-    .select(
-      'id, order_id, total, payment_status, payment_provider, payment_method, counter_payment_method, cash_received_amount, online_received_amount, paid_amount',
-    )
+    .select(COUNTER_PAYMENT_ORDER_SELECT)
     .eq('order_id', orderId)
-    .maybeSingle<DirectPaymentOrder>();
+    .maybeSingle<Omit<DirectPaymentOrder, 'supportsCounterPaymentCapture'>>();
+
+  if (!orderError && order) {
+    return withCounterPaymentDefaults(order, true);
+  }
+
+  if (orderError && isCounterPaymentCaptureSchemaError(orderError)) {
+    const { data: baseOrder, error: baseOrderError } = await staffSupabase
+      .from('orders')
+      .select(BASE_PAYMENT_ORDER_SELECT)
+      .eq('order_id', orderId)
+      .maybeSingle<Omit<DirectPaymentOrder, 'supportsCounterPaymentCapture'>>();
+
+    if (baseOrderError || !baseOrder) {
+      throw new Error(baseOrderError?.message || 'Order not found');
+    }
+
+    return withCounterPaymentDefaults(baseOrder, false);
+  }
 
   if (orderError || !order) {
     throw new Error(orderError?.message || 'Order not found');
   }
 
-  return order;
+  return withCounterPaymentDefaults(order, true);
 }
 
 async function invokeMarkPaidFunction(
@@ -229,8 +311,11 @@ function getPaymentUpdate(order: DirectPaymentOrder, options: MarkOrderPaidOptio
   const paymentUpdate: PaymentUpdatePayload = {
     payment_status: 'paid',
     payment_verified_at: new Date().toISOString(),
-    paid_amount: orderTotal,
   };
+
+  if (order.supportsCounterPaymentCapture) {
+    paymentUpdate.paid_amount = orderTotal;
+  }
 
   if (order.payment_provider !== 'razorpay') {
     const existingCashAmount = roundCurrency(Number(order.cash_received_amount ?? 0));
@@ -253,34 +338,44 @@ function getPaymentUpdate(order: DirectPaymentOrder, options: MarkOrderPaidOptio
 
     paymentUpdate.payment_method = resolvedCounterPaymentMethod === 'cash' ? 'cod' : 'upi';
     paymentUpdate.payment_provider = null;
-    paymentUpdate.counter_payment_method = resolvedCounterPaymentMethod;
-    paymentUpdate.cash_received_amount = nextCashAmount > 0 ? nextCashAmount : null;
-    paymentUpdate.online_received_amount = nextOnlineAmount > 0 ? nextOnlineAmount : null;
+    if (order.supportsCounterPaymentCapture) {
+      paymentUpdate.counter_payment_method = resolvedCounterPaymentMethod;
+      paymentUpdate.cash_received_amount = nextCashAmount > 0 ? nextCashAmount : null;
+      paymentUpdate.online_received_amount = nextOnlineAmount > 0 ? nextOnlineAmount : null;
+    }
   }
 
   return paymentUpdate;
 }
 
 async function applyPaymentUpdate(order: DirectPaymentOrder, paymentUpdate: PaymentUpdatePayload) {
+  const updatePayload = order.supportsCounterPaymentCapture
+    ? paymentUpdate
+    : getBasePaymentUpdate(paymentUpdate);
   const { error: updateError } = await staffSupabase
     .from('orders')
-    .update(paymentUpdate)
+    .update(updatePayload)
     .eq('id', order.id);
+
+  if (
+    updateError &&
+    order.supportsCounterPaymentCapture &&
+    isCounterPaymentCaptureSchemaError(updateError)
+  ) {
+    const { error: fallbackUpdateError } = await staffSupabase
+      .from('orders')
+      .update(getBasePaymentUpdate(paymentUpdate))
+      .eq('id', order.id);
+
+    if (!fallbackUpdateError) {
+      order.supportsCounterPaymentCapture = false;
+      return;
+    }
+  }
 
   if (updateError) {
     throw new Error(updateError.message || 'Failed to update payment');
   }
-}
-
-async function syncCounterPaymentSelection(
-  baseOrder: DirectPaymentOrder | null,
-  options: MarkOrderPaidOptions,
-) {
-  if (!baseOrder || !options.counterPaymentMethod || baseOrder.payment_provider === 'razorpay') {
-    return;
-  }
-
-  await applyPaymentUpdate(baseOrder, getPaymentUpdate(baseOrder, options));
 }
 
 async function markOrderPaidDirectly(
@@ -309,27 +404,8 @@ function toMarkedOrderPaid(data: MarkOrderPaidResponse | null): MarkedOrderPaid 
   };
 }
 
-async function finalizeFunctionPaymentResult(
-  data: MarkOrderPaidResponse | null,
-  counterPaymentSnapshot: DirectPaymentOrder | null,
-  options: MarkOrderPaidOptions,
-) {
-  const result = toMarkedOrderPaid(data);
-  await syncCounterPaymentSelection(counterPaymentSnapshot, options);
-  return result;
-}
-
 export async function markOrderPaid(orderId: string, options: MarkOrderPaidOptions = {}) {
   let session = await ensureFreshPaidStatusSession();
-  let counterPaymentSnapshot: DirectPaymentOrder | null = null;
-
-  if (options.counterPaymentMethod) {
-    try {
-      counterPaymentSnapshot = await fetchDirectPaymentOrder(orderId);
-    } catch (snapshotError) {
-      console.error('Failed to snapshot counter payment before marking paid', snapshotError);
-    }
-  }
 
   const { data, error } = await invokeMarkPaidFunction(session, orderId, options);
 
@@ -343,10 +419,16 @@ export async function markOrderPaid(orderId: string, options: MarkOrderPaidOptio
           return markOrderPaidDirectly(orderId, options);
         }
 
-        throw await toMarkPaidFunctionError(retry.error);
+        const retryError = await toMarkPaidFunctionError(retry.error);
+
+        if (isCounterPaymentCaptureSchemaError(retryError)) {
+          return markOrderPaidDirectly(orderId, options);
+        }
+
+        throw retryError;
       }
 
-      return finalizeFunctionPaymentResult(retry.data, counterPaymentSnapshot, options);
+      return toMarkedOrderPaid(retry.data);
     } catch (refreshOrRetryError) {
       if (refreshOrRetryError instanceof Error && refreshOrRetryError.message.includes('sign in again')) {
         throw refreshOrRetryError;
@@ -357,8 +439,14 @@ export async function markOrderPaid(orderId: string, options: MarkOrderPaidOptio
   }
 
   if (error) {
-    throw await toMarkPaidFunctionError(error);
+    const functionError = await toMarkPaidFunctionError(error);
+
+    if (isCounterPaymentCaptureSchemaError(functionError)) {
+      return markOrderPaidDirectly(orderId, options);
+    }
+
+    throw functionError;
   }
 
-  return finalizeFunctionPaymentResult(data, counterPaymentSnapshot, options);
+  return toMarkedOrderPaid(data);
 }

@@ -15,6 +15,34 @@ interface MarkPaidBody {
   onlineReceivedAmount?: number;
 }
 
+type CounterPaymentMethod = "cash" | "online" | "split";
+
+type PaymentOrder = {
+  id: string;
+  order_id: string;
+  total: number | string | null;
+  payment_status: string | null;
+  payment_provider: string | null;
+  payment_method: string | null;
+  counter_payment_method?: CounterPaymentMethod | null;
+  cash_received_amount?: number | string | null;
+  online_received_amount?: number | string | null;
+  paid_amount?: number | string | null;
+  supportsCounterPaymentCapture: boolean;
+};
+
+type PaymentUpdatePayload = Record<string, string | number | null>;
+
+const BASE_PAYMENT_ORDER_SELECT = "id, order_id, total, payment_status, payment_provider, payment_method";
+const COUNTER_PAYMENT_ORDER_SELECT =
+  `${BASE_PAYMENT_ORDER_SELECT}, counter_payment_method, cash_received_amount, online_received_amount, paid_amount`;
+const COUNTER_PAYMENT_CAPTURE_COLUMNS = [
+  "counter_payment_method",
+  "cash_received_amount",
+  "online_received_amount",
+  "paid_amount",
+];
+
 function roundCurrency(value: number) {
   return Math.round(value * 100) / 100;
 }
@@ -31,6 +59,130 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    return typeof message === "string" ? message : String(message);
+  }
+
+  return String(error);
+}
+
+function getErrorCode(error: unknown) {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    return typeof code === "string" ? code : undefined;
+  }
+
+  return undefined;
+}
+
+function isCounterPaymentCaptureSchemaError(error: unknown) {
+  const message = getErrorMessage(error);
+  const code = getErrorCode(error);
+
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    /column .* does not exist/i.test(message) ||
+    /could not find .* column/i.test(message)
+  ) && COUNTER_PAYMENT_CAPTURE_COLUMNS.some((column) => message.includes(column));
+}
+
+function withCounterPaymentDefaults(
+  order: Omit<PaymentOrder, "supportsCounterPaymentCapture">,
+  supportsCounterPaymentCapture: boolean,
+): PaymentOrder {
+  return {
+    ...order,
+    counter_payment_method: order.counter_payment_method ?? null,
+    cash_received_amount: order.cash_received_amount ?? null,
+    online_received_amount: order.online_received_amount ?? null,
+    paid_amount: order.paid_amount ?? null,
+    supportsCounterPaymentCapture,
+  };
+}
+
+async function fetchPaymentOrder(
+  adminClient: ReturnType<typeof createClient>,
+  appOrderId: string,
+) {
+  const { data: order, error: orderError } = await adminClient
+    .from("orders")
+    .select(COUNTER_PAYMENT_ORDER_SELECT)
+    .eq("order_id", appOrderId)
+    .maybeSingle<Omit<PaymentOrder, "supportsCounterPaymentCapture">>();
+
+  if (!orderError && order) {
+    return withCounterPaymentDefaults(order, true);
+  }
+
+  if (orderError && isCounterPaymentCaptureSchemaError(orderError)) {
+    const { data: baseOrder, error: baseOrderError } = await adminClient
+      .from("orders")
+      .select(BASE_PAYMENT_ORDER_SELECT)
+      .eq("order_id", appOrderId)
+      .maybeSingle<Omit<PaymentOrder, "supportsCounterPaymentCapture">>();
+
+    if (baseOrderError) {
+      throw baseOrderError;
+    }
+
+    return baseOrder ? withCounterPaymentDefaults(baseOrder, false) : null;
+  }
+
+  if (orderError) {
+    throw orderError;
+  }
+
+  return null;
+}
+
+function getBasePaymentUpdate(paymentUpdate: PaymentUpdatePayload): PaymentUpdatePayload {
+  const basePaymentUpdate = { ...paymentUpdate };
+  delete basePaymentUpdate.counter_payment_method;
+  delete basePaymentUpdate.cash_received_amount;
+  delete basePaymentUpdate.online_received_amount;
+  delete basePaymentUpdate.paid_amount;
+
+  return basePaymentUpdate;
+}
+
+async function updateOrderPayment(
+  adminClient: ReturnType<typeof createClient>,
+  order: PaymentOrder,
+  paymentUpdate: PaymentUpdatePayload,
+) {
+  const updatePayload = order.supportsCounterPaymentCapture
+    ? paymentUpdate
+    : getBasePaymentUpdate(paymentUpdate);
+  const { error: updateError } = await adminClient
+    .from("orders")
+    .update(updatePayload)
+    .eq("id", order.id);
+
+  if (
+    updateError &&
+    order.supportsCounterPaymentCapture &&
+    isCounterPaymentCaptureSchemaError(updateError)
+  ) {
+    const { error: fallbackUpdateError } = await adminClient
+      .from("orders")
+      .update(getBasePaymentUpdate(paymentUpdate))
+      .eq("id", order.id);
+
+    if (!fallbackUpdateError) {
+      return;
+    }
+  }
+
+  if (updateError) {
+    throw updateError;
+  }
 }
 
 async function requestReceiptEmail(
@@ -131,15 +283,9 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: false, error: "Staff access required" }, 403);
     }
 
-    const { data: order, error: orderError } = await adminClient
-      .from("orders")
-      .select(
-        "id, order_id, total, payment_status, payment_provider, payment_method, counter_payment_method, cash_received_amount, online_received_amount, paid_amount",
-      )
-      .eq("order_id", appOrderId)
-      .maybeSingle();
+    const order = await fetchPaymentOrder(adminClient, appOrderId);
 
-    if (orderError || !order) {
+    if (!order) {
       return jsonResponse({ success: false, error: "Order not found" }, 404);
     }
 
@@ -211,11 +357,14 @@ Deno.serve(async (req: Request) => {
     }
 
     if (order.payment_status !== "paid") {
-      const paymentUpdate: Record<string, string | number | null> = {
+      const paymentUpdate: PaymentUpdatePayload = {
         payment_status: "paid",
         payment_verified_at: new Date().toISOString(),
-        paid_amount: orderTotal,
       };
+
+      if (order.supportsCounterPaymentCapture) {
+        paymentUpdate.paid_amount = orderTotal;
+      }
 
       if (order.payment_provider !== "razorpay") {
         const existingCashAmount = roundCurrency(Number(order.cash_received_amount ?? 0));
@@ -238,33 +387,28 @@ Deno.serve(async (req: Request) => {
 
         paymentUpdate.payment_method = resolvedCounterPaymentMethod === "cash" ? "cod" : "upi";
         paymentUpdate.payment_provider = null;
-        paymentUpdate.counter_payment_method = resolvedCounterPaymentMethod;
-        paymentUpdate.cash_received_amount = nextCashAmount > 0 ? nextCashAmount : null;
-        paymentUpdate.online_received_amount = nextOnlineAmount > 0 ? nextOnlineAmount : null;
+
+        if (order.supportsCounterPaymentCapture) {
+          paymentUpdate.counter_payment_method = resolvedCounterPaymentMethod;
+          paymentUpdate.cash_received_amount = nextCashAmount > 0 ? nextCashAmount : null;
+          paymentUpdate.online_received_amount = nextOnlineAmount > 0 ? nextOnlineAmount : null;
+        }
       }
 
-      const { error: updateError } = await adminClient
-        .from("orders")
-        .update(paymentUpdate)
-        .eq("id", order.id);
-
-      if (updateError) {
-        throw updateError;
-      }
+      await updateOrderPayment(adminClient, order, paymentUpdate);
     }
 
-    let receiptEmailSent = true;
-    try {
-      await requestReceiptEmail(supabaseUrl, anonKey, serviceKey, order.order_id);
-    } catch (receiptError) {
-      receiptEmailSent = false;
-      console.error("Failed to send payment receipt email", receiptError);
-    }
+    EdgeRuntime.waitUntil(
+      requestReceiptEmail(supabaseUrl, anonKey, serviceKey, order.order_id)
+        .catch((receiptError) => {
+          console.error("Failed to send payment receipt email", receiptError);
+        }),
+    );
 
     return jsonResponse({
       success: true,
       appOrderId: order.order_id,
-      receiptEmailSent,
+      receiptEmailSent: true,
     });
   } catch (error) {
     return jsonResponse(

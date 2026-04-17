@@ -356,7 +356,13 @@ export default function ChefDashboard() {
         delete next[order.id];
         return next;
       });
-      await loadOrders();
+      setOrders((current) => current.map((currentOrder) => (
+        currentOrder.id === order.id
+          ? getOptimisticPaidOrder(currentOrder, counterPaymentMethod, cashReceivedAmount, onlineReceivedAmount)
+          : currentOrder
+      )));
+      setPayingOrderId(null);
+      void loadOrders();
 
       if (result.receiptEmailSent === false) {
         showToast('Payment updated, but receipt email failed', 'error');
@@ -1306,6 +1312,42 @@ function getDefaultPaymentDraft(order: Order): PaymentDraft {
     method,
     cashReceived: method === 'cash' ? formatMoney(amountDue) : '',
     onlineReceived: method === 'online' ? formatMoney(amountDue) : '',
+  };
+}
+
+function getOptimisticPaidOrder(
+  order: Order,
+  counterPaymentMethod: CounterPaymentMethod,
+  cashReceivedAmount?: number,
+  onlineReceivedAmount?: number,
+): Order {
+  const amountDue = getOrderAmountDue(order);
+  const cashDelta = counterPaymentMethod === 'cash' || counterPaymentMethod === 'split'
+    ? Number(cashReceivedAmount ?? (counterPaymentMethod === 'cash' ? amountDue : 0))
+    : 0;
+  const onlineDelta = counterPaymentMethod === 'online'
+    ? Number(onlineReceivedAmount ?? amountDue)
+    : counterPaymentMethod === 'split'
+      ? Number(onlineReceivedAmount ?? 0)
+      : 0;
+  const nextCashAmount = roundCurrency(Number(order.cash_received_amount ?? 0) + cashDelta);
+  const nextOnlineAmount = roundCurrency(Number(order.online_received_amount ?? 0) + onlineDelta);
+  const resolvedCounterPaymentMethod: CounterPaymentMethod = nextCashAmount > 0 && nextOnlineAmount > 0
+    ? 'split'
+    : nextOnlineAmount > 0
+      ? 'online'
+      : 'cash';
+
+  return {
+    ...order,
+    payment_status: 'paid',
+    payment_provider: null,
+    payment_method: resolvedCounterPaymentMethod === 'cash' ? 'cod' : 'upi',
+    payment_verified_at: new Date().toISOString(),
+    counter_payment_method: resolvedCounterPaymentMethod,
+    cash_received_amount: nextCashAmount > 0 ? nextCashAmount : null,
+    online_received_amount: nextOnlineAmount > 0 ? nextOnlineAmount : null,
+    paid_amount: roundCurrency(Number(order.total || 0)),
   };
 }
 
