@@ -6,9 +6,14 @@ import {
   reserveReviewRewardCoupon,
 } from "../_shared/review-rewards.ts";
 import {
+  expireStalePendingOrders,
   releaseOrderInventory,
   reserveOrderInventory,
 } from "../_shared/inventory.ts";
+import {
+  getBearerToken,
+  shouldResolveUserFromAuthToken,
+} from "../_shared/auth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -17,6 +22,7 @@ const corsHeaders = {
     "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 const TAKEAWAY_FEE = 10;
+const LEGACY_CHECKOUT_PHONE_PLACEHOLDER = "0000000000";
 
 interface CounterOrderItem {
   menu_item_id: string;
@@ -41,7 +47,7 @@ interface CreateBody {
 }
 
 type AppOrderInsert = {
-  user_id: string;
+  user_id: string | null;
   customer_name: string;
   customer_phone: string;
   customer_email: string;
@@ -92,6 +98,15 @@ function isMissingOrderColumn(
 
 function roundCurrency(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function isValidEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function normalizeCustomerPhone(value: string) {
+  const trimmed = value.trim();
+  return trimmed === LEGACY_CHECKOUT_PHONE_PLACEHOLDER ? "" : trimmed;
 }
 
 async function getUnavailableMenuItemNames(
@@ -213,7 +228,7 @@ async function requestReceiptEmail(
     method: "POST",
     headers: {
       Authorization: `Bearer ${serviceKey}`,
-      apikey: anonKey,
+      apikey: serviceKey,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ orderId, type }),
@@ -255,13 +270,9 @@ Deno.serve(async (req: Request) => {
 
   try {
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return jsonResponse({ success: false, error: "Missing authorization" }, 401);
-    }
-
     const body = await req.json() as CreateBody;
     const customerName = body.customerName?.trim() || "";
-    const customerPhone = body.customerPhone?.trim() || "";
+    const customerPhone = normalizeCustomerPhone(body.customerPhone || "");
     const customerEmail = body.customerEmail?.trim() || "";
     const pickupOption = body.pickupOption === "dine_in" ? "dine_in" : "takeaway";
     const paymentMethod = body.paymentMethod === "upi"
@@ -278,8 +289,8 @@ Deno.serve(async (req: Request) => {
     const takeawayFee = pickupOption === "takeaway" ? TAKEAWAY_FEE : 0;
     const expectedTotal = roundCurrency(Math.max(0, subtotal - discount) + takeawayFee);
 
-    if (!customerName || !customerPhone) {
-      return jsonResponse({ success: false, error: "Customer details are required" }, 400);
+    if (!customerName || !customerEmail || !isValidEmail(customerEmail)) {
+      return jsonResponse({ success: false, error: "Customer name and email are required" }, 400);
     }
 
     if (!items.length) {
@@ -313,33 +324,36 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const authToken = getBearerToken(authHeader);
+    const shouldResolveUser = shouldResolveUserFromAuthToken(authToken, anonKey);
 
-    const userClient = createClient(supabaseUrl, anonKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-      global: { headers: { Authorization: authHeader } },
-    });
     const adminClient = createClient(supabaseUrl, serviceKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    const [
-      {
-        data: { user },
+    let user: { id: string } | null = null;
+    if (shouldResolveUser) {
+      const userClient = createClient(supabaseUrl, anonKey, {
+        auth: { autoRefreshToken: false, persistSession: false },
+        global: { headers: { Authorization: `Bearer ${authToken}` } },
+      });
+      const {
+        data: { user: requestUser },
         error: authError,
-      },
-      { data: siteSettings },
-    ] = await Promise.all([
-      userClient.auth.getUser(),
-      adminClient
-        .from("site_settings")
-        .select("site_is_open, reopening_text")
-        .eq("id", true)
-        .maybeSingle(),
-    ]);
+      } = await userClient.auth.getUser();
 
-    if (authError || !user) {
-      return jsonResponse({ success: false, error: "Unauthorized request" }, 401);
+      if (authError || !requestUser) {
+        return jsonResponse({ success: false, error: "Unauthorized request" }, 401);
+      }
+
+      user = { id: requestUser.id };
     }
+
+    const { data: siteSettings } = await adminClient
+      .from("site_settings")
+      .select("site_is_open, reopening_text")
+      .eq("id", true)
+      .maybeSingle();
 
     if (siteSettings && !siteSettings.site_is_open) {
       return jsonResponse({
@@ -348,10 +362,7 @@ Deno.serve(async (req: Request) => {
       }, 409);
     }
 
-    const { error: expireOrdersError } = await adminClient.rpc("expire_stale_pending_orders");
-    if (expireOrdersError) {
-      throw expireOrdersError;
-    }
+    await expireStalePendingOrders(adminClient);
 
     const unavailableMenuItemNames = await getUnavailableMenuItemNames(adminClient, items);
 
@@ -366,6 +377,10 @@ Deno.serve(async (req: Request) => {
 
     let expectedReviewRewardDiscount = 0;
     if (reviewRewardCouponId) {
+      if (!user) {
+        return jsonResponse({ success: false, error: "Sign in to use review rewards" }, 401);
+      }
+
       const reviewRewardCoupon = await getReviewRewardCouponForCheckout(adminClient, reviewRewardCouponId, user.id);
 
       if (!reviewRewardCoupon) {
@@ -389,7 +404,7 @@ Deno.serve(async (req: Request) => {
     const paymentStatus = total <= 0 ? "paid" : "pending";
 
     const orderInsert: AppOrderInsert = {
-      user_id: user.id,
+      user_id: user?.id ?? null,
       customer_name: customerName,
       customer_phone: customerPhone,
       customer_email: customerEmail,
@@ -439,7 +454,7 @@ Deno.serve(async (req: Request) => {
       }, 409);
     }
 
-    if (reviewRewardCouponId) {
+    if (reviewRewardCouponId && user) {
       const reservedReviewReward = await reserveReviewRewardCoupon(
         adminClient,
         reviewRewardCouponId,

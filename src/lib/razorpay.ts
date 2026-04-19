@@ -97,6 +97,8 @@ let razorpayScriptPromise: Promise<void> | null = null;
 
 const MISSING_RAZORPAY_FUNCTIONS_MESSAGE =
   'Online payment is not enabled on this Supabase project yet. Deploy the Razorpay Edge Functions first.';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+const GUEST_EDGE_CHECKOUT_ENABLED = import.meta.env.VITE_GUEST_EDGE_CHECKOUT_ENABLED === 'true';
 export const RAZORPAY_BRAND_IMAGE =
   typeof window === 'undefined' || /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(window.location.hostname)
     ? undefined
@@ -134,25 +136,32 @@ async function refreshCustomerSession(errorMessage = 'Please sign in again to co
   return refreshedData.session;
 }
 
-async function ensureFreshToken(options?: { forceRefresh?: boolean; errorMessage?: string }) {
+interface FunctionAuthToken {
+  accessToken: string;
+  isGuest: boolean;
+}
+
+async function getFunctionAuthToken(options?: { forceRefresh?: boolean; errorMessage?: string }): Promise<FunctionAuthToken> {
   const forceRefresh = options?.forceRefresh ?? false;
   const errorMessage = options?.errorMessage ?? 'Please sign in again to continue.';
 
   if (forceRefresh) {
-    return refreshCustomerSession(errorMessage);
+    const session = await refreshCustomerSession(errorMessage);
+    return { accessToken: session.access_token, isGuest: false };
   }
 
   const { data: sessionData } = await customerSupabase.auth.getSession();
   if (!sessionData.session) {
-    return refreshCustomerSession(errorMessage);
+    return { accessToken: supabaseAnonKey, isGuest: true };
   } else {
     const expiresAtMs = sessionData.session.expires_at ? sessionData.session.expires_at * 1000 : 0;
     if (expiresAtMs && expiresAtMs - Date.now() < 60_000) {
-      return refreshCustomerSession(errorMessage);
+      const session = await refreshCustomerSession(errorMessage);
+      return { accessToken: session.access_token, isGuest: false };
     }
   }
 
-  return sessionData.session;
+  return { accessToken: sessionData.session.access_token, isGuest: false };
 }
 
 async function toRazorpayFunctionError(error: unknown, fallbackMessage: string) {
@@ -233,25 +242,30 @@ export function loadRazorpayScript() {
 }
 
 export async function createRazorpayOrder(payload: CreateRazorpayOrderPayload) {
-  let session = await ensureFreshToken();
+  let authToken = await getFunctionAuthToken();
+
+  if (authToken.isGuest && !GUEST_EDGE_CHECKOUT_ENABLED) {
+    throw new Error('Guest online payment needs the store backend update before an Order ID can be created.');
+  }
+
   const { data, error } = await customerSupabase.functions.invoke<CreateRazorpayOrderResponse>(
     'create-razorpay-order',
     {
       body: payload,
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
+        Authorization: `Bearer ${authToken.accessToken}`,
       },
     },
   );
 
-  if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401) {
-    session = await ensureFreshToken({ forceRefresh: true });
+  if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401 && !authToken.isGuest) {
+    authToken = await getFunctionAuthToken({ forceRefresh: true });
     const retry = await customerSupabase.functions.invoke<CreateRazorpayOrderResponse>(
       'create-razorpay-order',
       {
         body: payload,
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${authToken.accessToken}`,
         },
       },
     );
@@ -262,6 +276,10 @@ export async function createRazorpayOrder(payload: CreateRazorpayOrderPayload) {
       throw new Error(retry.data?.error || 'Failed to create Razorpay order');
     }
     return retry.data;
+  }
+
+  if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401 && authToken.isGuest) {
+    throw new Error('Guest online payment needs the store backend update before an Order ID can be created.');
   }
 
   if (error) {
@@ -276,21 +294,21 @@ export async function createRazorpayOrder(payload: CreateRazorpayOrderPayload) {
 }
 
 export async function createExistingRazorpayOrder(appOrderId: string) {
-  let session = await ensureFreshToken();
+  let authToken = await getFunctionAuthToken();
   const invoke = () => customerSupabase.functions.invoke<CreateExistingRazorpayOrderResponse>(
     'create-existing-razorpay-order',
     {
       body: { appOrderId },
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
+        Authorization: `Bearer ${authToken.accessToken}`,
       },
     },
   );
 
   const { data, error } = await invoke();
 
-  if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401) {
-    session = await ensureFreshToken({ forceRefresh: true });
+  if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401 && !authToken.isGuest) {
+    authToken = await getFunctionAuthToken({ forceRefresh: true });
     const retry = await invoke();
     if (retry.error) {
       throw await toRazorpayFunctionError(retry.error, 'Failed to start online payment');
@@ -313,25 +331,25 @@ export async function createExistingRazorpayOrder(appOrderId: string) {
 }
 
 export async function verifyRazorpayPayment(payload: VerifyRazorpayPaymentPayload) {
-  let session = await ensureFreshToken();
+  let authToken = await getFunctionAuthToken();
   const { data, error } = await customerSupabase.functions.invoke<VerifyRazorpayPaymentResponse>(
     'verify-razorpay-payment',
     {
       body: payload,
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
+        Authorization: `Bearer ${authToken.accessToken}`,
       },
     },
   );
 
-  if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401) {
-    session = await ensureFreshToken({ forceRefresh: true });
+  if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401 && !authToken.isGuest) {
+    authToken = await getFunctionAuthToken({ forceRefresh: true });
     const retry = await customerSupabase.functions.invoke<VerifyRazorpayPaymentResponse>(
       'verify-razorpay-payment',
       {
         body: payload,
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${authToken.accessToken}`,
         },
       },
     );
@@ -356,25 +374,25 @@ export async function verifyRazorpayPayment(payload: VerifyRazorpayPaymentPayloa
 }
 
 export async function cancelRazorpayPayment(appOrderId: string) {
-  let session = await ensureFreshToken();
+  let authToken = await getFunctionAuthToken();
   const { data, error } = await customerSupabase.functions.invoke<CancelRazorpayPaymentResponse>(
     'cancel-razorpay-payment',
     {
       body: { appOrderId },
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
+        Authorization: `Bearer ${authToken.accessToken}`,
       },
     },
   );
 
-  if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401) {
-    session = await ensureFreshToken({ forceRefresh: true });
+  if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401 && !authToken.isGuest) {
+    authToken = await getFunctionAuthToken({ forceRefresh: true });
     const retry = await customerSupabase.functions.invoke<CancelRazorpayPaymentResponse>(
       'cancel-razorpay-payment',
       {
         body: { appOrderId },
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${authToken.accessToken}`,
         },
       },
     );
@@ -399,25 +417,25 @@ export async function cancelRazorpayPayment(appOrderId: string) {
 }
 
 export async function reconcileRazorpayPayment(appOrderId: string) {
-  let session = await ensureFreshToken();
+  let authToken = await getFunctionAuthToken();
   const { data, error } = await customerSupabase.functions.invoke<ReconcileRazorpayPaymentResponse>(
     'reconcile-razorpay-payment',
     {
       body: { appOrderId },
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
+        Authorization: `Bearer ${authToken.accessToken}`,
       },
     },
   );
 
-  if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401) {
-    session = await ensureFreshToken({ forceRefresh: true });
+  if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401 && !authToken.isGuest) {
+    authToken = await getFunctionAuthToken({ forceRefresh: true });
     const retry = await customerSupabase.functions.invoke<ReconcileRazorpayPaymentResponse>(
       'reconcile-razorpay-payment',
       {
         body: { appOrderId },
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${authToken.accessToken}`,
         },
       },
     );

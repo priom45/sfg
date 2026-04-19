@@ -5,6 +5,10 @@ import {
   resolvePaymentByPaymentId,
   verifyCheckoutSignature,
 } from "../_shared/razorpay.ts";
+import {
+  getBearerToken,
+  shouldResolveUserFromAuthToken,
+} from "../_shared/auth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -38,10 +42,6 @@ Deno.serve(async (req: Request) => {
 
   try {
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return jsonResponse({ success: false, error: "Missing authorization" }, 401);
-    }
-
     const body = await req.json() as VerifyBody;
     const appOrderId = body.appOrderId?.trim() || "";
     const razorpayOrderId = body.razorpayOrderId?.trim() || "";
@@ -53,22 +53,29 @@ Deno.serve(async (req: Request) => {
     }
 
     const env = loadRazorpayEnv();
+    const authToken = getBearerToken(authHeader);
+    const shouldResolveUser = shouldResolveUserFromAuthToken(authToken, env.anonKey);
 
-    const userClient = createClient(env.supabaseUrl, env.anonKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-      global: { headers: { Authorization: authHeader } },
-    });
     const adminClient = createClient(env.supabaseUrl, env.serviceKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    const {
-      data: { user },
-      error: authError,
-    } = await userClient.auth.getUser();
+    let user: { id: string } | null = null;
+    if (shouldResolveUser) {
+      const userClient = createClient(env.supabaseUrl, env.anonKey, {
+        auth: { autoRefreshToken: false, persistSession: false },
+        global: { headers: { Authorization: `Bearer ${authToken}` } },
+      });
+      const {
+        data: { user: requestUser },
+        error: authError,
+      } = await userClient.auth.getUser();
 
-    if (authError || !user) {
-      return jsonResponse({ success: false, error: "Unauthorized request" }, 401);
+      if (authError || !requestUser) {
+        return jsonResponse({ success: false, error: "Unauthorized request" }, 401);
+      }
+
+      user = { id: requestUser.id };
     }
 
     const { data: order, error: orderError } = await adminClient
@@ -81,7 +88,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: false, error: "Order not found" }, 404);
     }
 
-    if (order.user_id !== user.id) {
+    if (order.user_id && order.user_id !== user?.id) {
       return jsonResponse({ success: false, error: "Order access denied" }, 403);
     }
 

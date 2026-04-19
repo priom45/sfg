@@ -1,5 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import {
+  getBearerToken,
+  shouldResolveUserFromAuthToken,
+} from "../_shared/auth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -70,10 +74,6 @@ Deno.serve(async (req: Request) => {
 
   try {
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return jsonResponse({ success: false, error: "Missing authorization" }, 401);
-    }
-
     const { appOrderId } = await req.json() as CreateBody;
     const normalizedOrderId = appOrderId?.trim() || "";
 
@@ -86,26 +86,33 @@ Deno.serve(async (req: Request) => {
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const razorpayKeyId = Deno.env.get("RAZORPAY_KEY_ID")?.trim();
     const razorpaySecret = Deno.env.get("RAZORPAY_SECRET")?.trim();
+    const authToken = getBearerToken(authHeader);
+    const shouldResolveUser = shouldResolveUserFromAuthToken(authToken, anonKey);
 
     if (!razorpayKeyId || !razorpaySecret) {
       return jsonResponse({ success: false, error: "Razorpay is not configured" }, 500);
     }
 
-    const userClient = createClient(supabaseUrl, anonKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-      global: { headers: { Authorization: authHeader } },
-    });
     const adminClient = createClient(supabaseUrl, serviceKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    const {
-      data: { user },
-      error: authError,
-    } = await userClient.auth.getUser();
+    let user: { id: string } | null = null;
+    if (shouldResolveUser) {
+      const userClient = createClient(supabaseUrl, anonKey, {
+        auth: { autoRefreshToken: false, persistSession: false },
+        global: { headers: { Authorization: `Bearer ${authToken}` } },
+      });
+      const {
+        data: { user: requestUser },
+        error: authError,
+      } = await userClient.auth.getUser();
 
-    if (authError || !user) {
-      return jsonResponse({ success: false, error: "Unauthorized request" }, 401);
+      if (authError || !requestUser) {
+        return jsonResponse({ success: false, error: "Unauthorized request" }, 401);
+      }
+
+      user = { id: requestUser.id };
     }
 
     const { data: order, error: orderError } = await adminClient
@@ -129,7 +136,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: false, error: "Order not found" }, 404);
     }
 
-    if (order.user_id !== user.id) {
+    if (order.user_id && order.user_id !== user?.id) {
       return jsonResponse({ success: false, error: "Order access denied" }, 403);
     }
 

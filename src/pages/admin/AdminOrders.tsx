@@ -6,6 +6,7 @@ import { downloadOrderReceiptPdf } from '../../lib/orderReceiptPdf';
 import { expireStalePendingOrders } from '../../lib/inventorySchema';
 import { supabase } from '../../lib/supabase';
 import { getCompletedOrderLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment, isDineInOrder } from '../../lib/orderLabels';
+import { getCustomerContactLabel } from '../../lib/checkoutCustomer';
 import { useToast } from '../../components/Toast';
 import type { Order, OrderStatus } from '../../types';
 
@@ -413,7 +414,7 @@ export default function AdminOrders() {
                       </span>
                     </div>
                     <p className="text-sm text-brand-text-muted mt-0.5">
-                      {order.customer_name} &bull; {order.customer_phone}
+                      {order.customer_name} &bull; {getCustomerContactLabel(order.customer_phone, order.customer_email)}
                     </p>
                   </div>
                   <div className="text-right flex-shrink-0">

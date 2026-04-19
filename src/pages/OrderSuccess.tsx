@@ -7,12 +7,14 @@ import { clearPendingOnlineOrder, readPendingOnlineOrder } from '../lib/pendingO
 import { supabase } from '../lib/supabase';
 import { getPaymentMethodLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment } from '../lib/orderLabels';
 import { RAZORPAY_BRAND_IMAGE, createExistingRazorpayOrder, loadRazorpayScript, reconcileRazorpayPayment, verifyRazorpayPayment } from '../lib/razorpay';
+import { getRazorpayPrefillContact } from '../lib/checkoutCustomer';
 import type { Order, MenuItem } from '../types';
 import { useToast } from '../components/Toast';
 import { playOrderSound, playOrderCompleteSound, playPickupReadyAlert } from '../lib/sounds';
 import { useAuth } from '../contexts/AuthContext';
 import { useCart } from '../contexts/CartContext';
 import { staggerContainer, staggerChild } from '../lib/animations';
+import { readGuestOrderSnapshot, updateGuestOrderSnapshot } from '../lib/guestOrderSnapshot';
 
 const SESSION_KEYWORDS = ['session expired', 'sign in again', 'please sign in', 'authentication failed'];
 
@@ -63,24 +65,34 @@ export default function OrderSuccessPage() {
   }, []);
 
   useEffect(() => {
-    if (!orderId || !user) {
+    if (!orderId) {
       setOrder(null);
       setLoading(false);
       return;
     }
 
     let isMounted = true;
-    const currentUser = user;
 
     prevStatusRef.current = null;
     pickupAlertPlayedRef.current = false;
     setLoading(true);
 
     async function loadOrder() {
+      if (!user) {
+        const guestOrder = readGuestOrderSnapshot(orderId);
+        if (!isMounted) {
+          return;
+        }
+
+        setOrder(guestOrder);
+        setLoading(false);
+        return;
+      }
+
       const { data } = await supabase
         .from('orders')
         .select('*')
-        .eq('user_id', currentUser.id)
+        .eq('user_id', user.id)
         .eq('order_id', orderId)
         .maybeSingle();
 
@@ -88,7 +100,7 @@ export default function OrderSuccessPage() {
         return;
       }
 
-      setOrder(data ?? null);
+      setOrder(data ?? readGuestOrderSnapshot(orderId));
       setLoading(false);
     }
 
@@ -187,6 +199,13 @@ export default function OrderSuccessPage() {
         const reconciliation = await reconcileRazorpayPayment(order.order_id);
 
         if (reconciliation.paymentState === 'paid') {
+          updateGuestOrderSnapshot(order.order_id, {
+            payment_status: 'paid',
+            payment_provider: 'razorpay',
+            payment_method: reconciliation.paymentMethod ?? order.payment_method,
+            status: (reconciliation.orderStatus as Order['status'] | undefined) ?? order.status,
+            payment_verified_at: new Date().toISOString(),
+          });
           setOrder((currentOrder) => currentOrder && currentOrder.order_id === order.order_id
             ? {
                 ...currentOrder,
@@ -202,6 +221,12 @@ export default function OrderSuccessPage() {
 
         if (reconciliation.paymentState === 'failed') {
           clearPendingOnlineOrder(order.order_id);
+          updateGuestOrderSnapshot(order.order_id, {
+            payment_status: 'failed',
+            status: reconciliation.orderStatus === 'expired'
+              ? 'expired'
+              : (reconciliation.orderStatus as Order['status'] | undefined) ?? order.status,
+          });
           setOrder((currentOrder) => currentOrder && currentOrder.order_id === order.order_id
             ? {
                 ...currentOrder,
@@ -258,7 +283,7 @@ export default function OrderSuccessPage() {
           prefill: {
             name: razorpayOrder.customerName,
             email: razorpayOrder.customerEmail,
-            contact: razorpayOrder.customerPhone,
+            contact: getRazorpayPrefillContact(razorpayOrder.customerPhone),
           },
           notes: {
             app_order_id: razorpayOrder.appOrderId,
@@ -311,13 +336,19 @@ export default function OrderSuccessPage() {
         payment_provider: 'razorpay',
         payment_method: paymentMethod === 'upi' ? 'upi' : 'card',
       } : currentOrder);
+      updateGuestOrderSnapshot(order.order_id, {
+        payment_status: 'paid',
+        payment_provider: 'razorpay',
+        payment_method: paymentMethod === 'upi' ? 'upi' : 'card',
+        payment_verified_at: new Date().toISOString(),
+      });
       showToast('Payment completed successfully');
     } catch (paymentError) {
       console.error('Failed to complete online payment', paymentError);
       const message = paymentError instanceof Error ? paymentError.message : 'Failed to complete online payment';
       const lowerMessage = message.toLowerCase();
       const isSessionError = SESSION_KEYWORDS.some((keyword) => lowerMessage.includes(keyword));
-      if (isSessionError) {
+      if (isSessionError && user) {
         navigate('/auth', { state: { from: `/order-success/${order.order_id}` }, replace: true });
       }
       showToast(message === 'Payment cancelled' ? 'Payment cancelled' : message, 'error');
@@ -697,7 +728,7 @@ export default function OrderSuccessPage() {
         )}
 
         <div className="flex flex-col gap-3">
-          {!isDelivered && !isCancelled && !isExpired && (
+          {user && !isDelivered && !isCancelled && !isExpired && (
             <Link to={`/track/${order.order_id}`} className="btn-primary w-full text-center">
               Track Order
             </Link>

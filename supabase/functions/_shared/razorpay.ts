@@ -153,7 +153,7 @@ export async function requestReceiptEmail(env: RazorpayEnv, orderId: string) {
     method: "POST",
     headers: {
       Authorization: `Bearer ${env.serviceKey}`,
-      apikey: env.anonKey,
+      apikey: env.serviceKey,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ orderId }),

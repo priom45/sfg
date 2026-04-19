@@ -50,6 +50,12 @@ class CounterOrderHttpError extends Error {
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+const GUEST_EDGE_CHECKOUT_ENABLED = import.meta.env.VITE_GUEST_EDGE_CHECKOUT_ENABLED === 'true';
+
+interface CounterOrderAuthToken {
+  accessToken: string;
+  isGuest: boolean;
+}
 
 async function refreshCounterOrderSession(errorMessage = 'Please sign in again to place your order.') {
   const { data: refreshedData, error: refreshError } = await customerSupabase.auth.refreshSession();
@@ -60,31 +66,37 @@ async function refreshCounterOrderSession(errorMessage = 'Please sign in again t
   return refreshedData.session;
 }
 
-async function ensureFreshCounterOrderSession(options?: { forceRefresh?: boolean; errorMessage?: string }) {
+async function getCounterOrderAuthToken(options?: { forceRefresh?: boolean; errorMessage?: string }): Promise<CounterOrderAuthToken> {
   const forceRefresh = options?.forceRefresh ?? false;
   const errorMessage = options?.errorMessage ?? 'Please sign in again to place your order.';
 
   if (forceRefresh) {
-    return refreshCounterOrderSession(errorMessage);
+    const session = await refreshCounterOrderSession(errorMessage);
+    return { accessToken: session.access_token, isGuest: false };
   }
 
   const { data: sessionData } = await customerSupabase.auth.getSession();
 
   if (!sessionData.session) {
-    return refreshCounterOrderSession(errorMessage);
+    return { accessToken: supabaseAnonKey, isGuest: true };
   }
 
   const expiresAtMs = sessionData.session.expires_at ? sessionData.session.expires_at * 1000 : 0;
   if (expiresAtMs && expiresAtMs - Date.now() < 60_000) {
-    return refreshCounterOrderSession(errorMessage);
+    const session = await refreshCounterOrderSession(errorMessage);
+    return { accessToken: session.access_token, isGuest: false };
   }
 
-  return sessionData.session;
+  return { accessToken: sessionData.session.access_token, isGuest: false };
 }
 
-async function toCounterOrderFunctionError(error: unknown) {
+async function toCounterOrderFunctionError(error: unknown, isGuest = false) {
   if (error instanceof CounterOrderHttpError) {
     if (error.status === 401) {
+      if (isGuest) {
+        return new Error('Guest orders need the store backend update before an Order ID can be created.');
+      }
+
       return new Error('Authentication failed. Please sign in again to place your order.');
     }
 
@@ -139,22 +151,26 @@ async function invokeCounterOrderFunction(payload: CreateCounterOrderPayload, ac
 }
 
 export async function createCounterOrder(payload: CreateCounterOrderPayload) {
-  let session = await ensureFreshCounterOrderSession();
+  let authToken = await getCounterOrderAuthToken();
+
+  if (authToken.isGuest && !GUEST_EDGE_CHECKOUT_ENABLED) {
+    throw new Error('Guest pay-at-counter needs the store backend update before an Order ID can be created.');
+  }
 
   let data: CreateCounterOrderResponse | null = null;
 
   try {
-    data = await invokeCounterOrderFunction(payload, session.access_token);
+    data = await invokeCounterOrderFunction(payload, authToken.accessToken);
   } catch (error) {
-    if (error instanceof CounterOrderHttpError && error.status === 401) {
-      session = await ensureFreshCounterOrderSession({ forceRefresh: true });
+    if (error instanceof CounterOrderHttpError && error.status === 401 && !authToken.isGuest) {
+      authToken = await getCounterOrderAuthToken({ forceRefresh: true });
       try {
-        data = await invokeCounterOrderFunction(payload, session.access_token);
+        data = await invokeCounterOrderFunction(payload, authToken.accessToken);
       } catch (retryError) {
-        throw await toCounterOrderFunctionError(retryError);
+        throw await toCounterOrderFunctionError(retryError, authToken.isGuest);
       }
     } else {
-      throw await toCounterOrderFunctionError(error);
+      throw await toCounterOrderFunctionError(error, authToken.isGuest);
     }
   }
 

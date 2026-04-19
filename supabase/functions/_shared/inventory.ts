@@ -7,6 +7,11 @@ type InventoryRpcResponse = {
   error?: string;
 };
 
+function isMissingRpcError(error: { code?: string; message?: string } | null, fn: string) {
+  return !!error &&
+    (error.code === "PGRST202" || error.code === "42883" || error.message?.includes(fn));
+}
+
 async function callInventoryRpc(
   adminClient: AdminClient,
   fn: "reserve_menu_item_inventory" | "release_menu_item_inventory",
@@ -17,6 +22,10 @@ async function callInventoryRpc(
   });
 
   if (error) {
+    if (isMissingRpcError(error, fn)) {
+      return { success: true, error: null };
+    }
+
     throw error;
   }
 
@@ -40,4 +49,12 @@ export async function releaseOrderInventory(
   orderId: string,
 ) {
   return callInventoryRpc(adminClient, "release_menu_item_inventory", orderId);
+}
+
+export async function expireStalePendingOrders(adminClient: AdminClient) {
+  const { error } = await adminClient.rpc("expire_stale_pending_orders");
+
+  if (error && !isMissingRpcError(error, "expire_stale_pending_orders")) {
+    throw error;
+  }
 }

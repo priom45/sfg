@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Minus, Plus, Trash2, ShoppingBag, ArrowLeft, Tag, User, Pencil, Store, Wallet, CreditCard, Gift } from 'lucide-react';
+import { Minus, Plus, Trash2, ShoppingBag, ArrowLeft, Tag, User, Pencil, Store, Wallet, CreditCard, Gift, Mail } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useCart } from '../contexts/CartContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -20,6 +20,8 @@ import {
 import { customerSupabase } from '../lib/supabase';
 import { readCheckoutSuccessOrder, storeCheckoutSuccessOrder } from '../lib/checkoutSuccess';
 import { clearPendingOnlineOrder, readPendingOnlineOrder, storePendingOnlineOrder } from '../lib/pendingOnlineOrder';
+import { storeGuestOrderSnapshot, updateGuestOrderSnapshot } from '../lib/guestOrderSnapshot';
+import { getCheckoutCustomerPhoneForApi, getRazorpayPrefillContact } from '../lib/checkoutCustomer';
 import { getServiceModeLabel } from '../lib/orderLabels';
 import { menuItemSupportsCustomizations } from '../lib/menuItems';
 import { fetchCustomizationAvailability, itemHasAssignedCustomizations, type CustomizationAvailability } from '../lib/customizations';
@@ -122,7 +124,7 @@ type RefreshmentSuggestion = {
   menuItem: OfferMenuCatalogItem;
   reason: string | null;
 };
-type CheckoutStep = 'service' | 'payment';
+type CheckoutStep = 'service' | 'customer' | 'payment';
 
 function getPromoRewardSummary(items: OfferRewardItem[]) {
   return items.map((item) => `${item.quantity}x ${item.item_name}`).join(', ');
@@ -130,6 +132,10 @@ function getPromoRewardSummary(items: OfferRewardItem[]) {
 
 function normalizeCatalogText(value: string | null | undefined) {
   return (value || '').trim().toLowerCase();
+}
+
+function isValidEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
 function matchesKeyword(text: string, keywords: string[]) {
@@ -174,7 +180,7 @@ export default function CartPage() {
   const { showToast } = useToast();
 
   const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
   const [pickupOption, setPickupOption] = useState<PickupOption>('dine_in');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('card');
   const [checkoutStep, setCheckoutStep] = useState<CheckoutStep | null>(null);
@@ -209,9 +215,11 @@ export default function CartPage() {
   useEffect(() => {
     if (profile) {
       if (profile.full_name && !name) setName(profile.full_name);
-      if (profile.phone && !phone) setPhone(profile.phone);
+      if (profile.email && !email) setEmail(profile.email);
+    } else if (user?.email && !email) {
+      setEmail(user.email);
     }
-  }, [profile, name, phone]);
+  }, [profile, user, name, email]);
 
   useEffect(() => {
     if (!user) {
@@ -495,7 +503,7 @@ export default function CartPage() {
   }, [editingItem, items, menuCatalogLoaded, offerMenuItemsById, removeItem, showToast]);
 
   function getCustomerEmail() {
-    return profile?.email?.trim() || user?.email?.trim() || '';
+    return email.trim() || profile?.email?.trim() || user?.email?.trim() || '';
   }
 
   async function syncProfileDetails() {
@@ -503,7 +511,7 @@ export default function CartPage() {
 
     const { error: profileUpdateError } = await customerSupabase.from('profiles').update({
       full_name: name.trim(),
-      phone: phone.trim(),
+      email: getCustomerEmail(),
     }).eq('id', user.id);
 
     if (profileUpdateError) {
@@ -529,9 +537,11 @@ export default function CartPage() {
   async function startRazorpayCheckout(customerEmail: string, checkoutPickupOption: PickupOption, checkoutTotal: number) {
     const razorpayScriptPromise = loadRazorpayScript();
     const checkoutServiceModeLabel = getServiceModeLabel({ order_type: 'pickup', pickup_option: checkoutPickupOption });
+    const customerName = name.trim();
+    const customerPhone = getCheckoutCustomerPhoneForApi();
     const razorpayOrder = await createRazorpayOrder({
-      customerName: name.trim(),
-      customerPhone: phone.trim(),
+      customerName,
+      customerPhone,
       customerEmail,
       pickupOption: checkoutPickupOption,
       subtotal,
@@ -542,6 +552,20 @@ export default function CartPage() {
       items: checkoutItems,
     });
     storePendingOnlineOrder(razorpayOrder.appOrderId);
+    if (!user) {
+      storeGuestOrderSnapshot({
+        orderId: razorpayOrder.appOrderId,
+        customerName,
+        customerEmail,
+        pickupOption: checkoutPickupOption,
+        subtotal,
+        discount,
+        total: checkoutTotal,
+        paymentMethod: 'card',
+        paymentProvider: 'razorpay',
+        paymentStatus: 'pending',
+      });
+    }
 
     try {
       await razorpayScriptPromise;
@@ -559,6 +583,11 @@ export default function CartPage() {
             const cancellation = await cancelRazorpayPayment(razorpayOrder.appOrderId);
 
             if (cancellation.paymentState === 'paid') {
+              updateGuestOrderSnapshot(cancellation.appOrderId || razorpayOrder.appOrderId, {
+                payment_status: 'paid',
+                payment_provider: 'razorpay',
+                payment_verified_at: new Date().toISOString(),
+              });
               redirectToVerifiedOrder(cancellation.appOrderId || razorpayOrder.appOrderId);
               resolve();
               return;
@@ -590,7 +619,7 @@ export default function CartPage() {
           prefill: {
             name: razorpayOrder.customerName,
             email: razorpayOrder.customerEmail,
-            contact: razorpayOrder.customerPhone,
+            contact: getRazorpayPrefillContact(razorpayOrder.customerPhone),
           },
           notes: {
             app_order_id: razorpayOrder.appOrderId,
@@ -635,6 +664,12 @@ export default function CartPage() {
                   return;
                 }
 
+                updateGuestOrderSnapshot(successfulOrderId, {
+                  payment_status: 'paid',
+                  payment_provider: 'razorpay',
+                  payment_method: verification.paymentMethod || 'card',
+                  payment_verified_at: new Date().toISOString(),
+                });
                 redirectToVerifiedOrder(successfulOrderId);
                 resolve();
               } catch (verificationError) {
@@ -661,6 +696,11 @@ export default function CartPage() {
       });
 
       if (cancellation?.paymentState === 'paid') {
+        updateGuestOrderSnapshot(cancellation.appOrderId || razorpayOrder.appOrderId, {
+          payment_status: 'paid',
+          payment_provider: 'razorpay',
+          payment_verified_at: new Date().toISOString(),
+        });
         redirectToVerifiedOrder(cancellation.appOrderId || razorpayOrder.appOrderId);
         return;
       }
@@ -675,19 +715,25 @@ export default function CartPage() {
     }
   }
 
-  function validateCheckoutStart() {
+  function validateCheckoutAvailability() {
     if (settings && !settings.site_is_open) {
       showToast(settings.reopening_text || 'Ordering is currently unavailable', 'error');
       return false;
     }
 
-    if (!user) {
-      navigate('/auth', { state: { from: '/cart' } });
+    return true;
+  }
+
+  function validateCustomerDetails() {
+    const customerEmail = getCustomerEmail();
+
+    if (!name.trim()) {
+      showToast('Please enter your name', 'error');
       return false;
     }
 
-    if (!name.trim() || !phone.trim()) {
-      showToast('Please fill in your name and phone number', 'error');
+    if (!customerEmail || !isValidEmail(customerEmail)) {
+      showToast('Please enter a valid email for your receipt', 'error');
       return false;
     }
 
@@ -695,7 +741,7 @@ export default function CartPage() {
   }
 
   function handleCheckoutStart() {
-    if (submitting || !validateCheckoutStart()) {
+    if (submitting || !validateCheckoutAvailability()) {
       return;
     }
 
@@ -709,15 +755,23 @@ export default function CartPage() {
   }
 
   function handlePickupChoice(option: PickupOption) {
-    if (submitting || !validateCheckoutStart()) {
+    if (submitting || !validateCheckoutAvailability()) {
       return;
     }
 
     setPickupOption(option);
+  }
 
-    if (getTotalForPickupOption(option) <= 0) {
-      setCheckoutStep(null);
-      void submitCheckout(option, paymentMethod);
+  function handleServiceContinue() {
+    if (submitting || !validateCheckoutAvailability()) {
+      return;
+    }
+
+    setCheckoutStep('customer');
+  }
+
+  function handleCustomerContinue() {
+    if (submitting || !validateCheckoutAvailability() || !validateCustomerDetails()) {
       return;
     }
 
@@ -725,17 +779,24 @@ export default function CartPage() {
   }
 
   function handlePaymentChoice(method: PaymentMethod) {
-    if (submitting || !validateCheckoutStart()) {
+    if (submitting || !validateCheckoutAvailability()) {
       return;
     }
 
     setPaymentMethod(method);
+  }
+
+  function handlePaymentContinue() {
+    if (submitting || !validateCheckoutAvailability() || !validateCustomerDetails()) {
+      return;
+    }
+
     setCheckoutStep(null);
-    void submitCheckout(pickupOption, method);
+    void submitCheckout(pickupOption, paymentMethod);
   }
 
   async function submitCheckout(checkoutPickupOption = pickupOption, checkoutPaymentMethod = paymentMethod) {
-    if (!validateCheckoutStart()) {
+    if (!validateCheckoutAvailability() || !validateCustomerDetails()) {
       return;
     }
 
@@ -756,7 +817,7 @@ export default function CartPage() {
 
       const order = await createCounterOrder({
         customerName: name.trim(),
-        customerPhone: phone.trim(),
+        customerPhone: getCheckoutCustomerPhoneForApi(),
         customerEmail,
         pickupOption: checkoutPickupOption,
         subtotal,
@@ -767,6 +828,21 @@ export default function CartPage() {
         reviewRewardDiscountAmount: reviewRewardDiscount,
         items: checkoutItems,
       });
+
+      if (!user) {
+        storeGuestOrderSnapshot({
+          orderId: order.appOrderId,
+          customerName: name.trim(),
+          customerEmail,
+          pickupOption: checkoutPickupOption,
+          subtotal,
+          discount,
+          total: checkoutTotal,
+          paymentMethod: checkoutPaymentMethod,
+          paymentProvider: null,
+          paymentStatus: checkoutIsFreeOrder ? 'paid' : 'pending',
+        });
+      }
 
       storeCheckoutSuccessOrder(order.appOrderId);
       showToast('Order placed successfully');
@@ -782,8 +858,11 @@ export default function CartPage() {
           : 'Failed to place order. Please try again.';
       const lowerMessage = message.toLowerCase();
       const isSessionError = SESSION_KEYWORDS.some((kw) => lowerMessage.includes(kw));
-      if (isSessionError) {
+      if (isSessionError && user) {
         navigate('/auth', { state: { from: '/cart' }, replace: true });
+      }
+      if (!user) {
+        setCheckoutStep('payment');
       }
       showToast(message === 'Payment cancelled' ? 'Payment cancelled' : message, 'error');
     } finally {
@@ -1196,52 +1275,10 @@ export default function CartPage() {
           </Link>
         </div>
 
-        {!user && (
-          <div className="bg-brand-gold/5 rounded-xl p-4 border border-brand-gold/20 mb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-brand-gold/10 rounded-full flex items-center justify-center flex-shrink-0">
-                <User size={18} className="text-brand-gold" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="font-bold text-white text-[14px]">Sign in to order</h3>
-                <p className="text-[12px] text-brand-text-dim">Track orders and save your details</p>
-              </div>
-              <Link
-                to="/auth"
-                state={{ from: '/cart' }}
-                className="btn-primary text-[13px] py-2 px-4"
-              >
-                Sign In
-              </Link>
-            </div>
-          </div>
-        )}
-
-        {user && (
-          <div className="bg-brand-surface rounded-xl p-4 border border-brand-border mb-4">
-            <div className="grid grid-cols-2 gap-3">
-              <input
-                type="text"
-                placeholder="Your Name *"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="input-field text-[14px]"
-              />
-              <input
-                type="tel"
-                placeholder="Phone *"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                className="input-field text-[14px]"
-              />
-            </div>
-          </div>
-        )}
-
         <div className="bg-brand-surface rounded-xl p-4 border border-brand-border mb-4">
           <h3 className="font-bold text-white text-[14px] mb-1">Checkout choices</h3>
           <p className="text-[12px] text-brand-text-dim">
-            Tap Proceed to choose Dine In or Takeaway first, then choose payment.
+            Tap Proceed to Pay to choose Dine In or Takeaway, then continue as guest or sign in before payment.
           </p>
         </div>
 
@@ -1451,13 +1488,11 @@ export default function CartPage() {
               transition={submitting ? { duration: 1.2, repeat: Infinity } : { duration: 0.1 }}
               className="btn-primary w-full text-center text-[15px] font-extrabold py-3.5 rounded-xl tracking-tight"
             >
-              {!user
-                ? 'Sign In to Continue'
-                : settings && !settings.site_is_open
+              {settings && !settings.site_is_open
                 ? settings.reopening_text || 'Orders Closed'
                 : submitting
                 ? paymentMethod === 'card' && !isFreeOrder ? 'Opening Payment...' : 'Placing Order...'
-                : 'Proceed to Checkout'}
+                : 'Proceed to Pay'}
             </motion.button>
           </div>
         </div>
@@ -1467,15 +1502,23 @@ export default function CartPage() {
         {checkoutStep && (
           <CheckoutFlowModal
             step={checkoutStep}
+            isSignedIn={!!user}
+            name={name}
+            email={email}
             pickupOption={pickupOption}
             paymentMethod={paymentMethod}
             total={total}
             isFreeOrder={isFreeOrder}
             submitting={submitting}
             onClose={closeCheckoutFlow}
-            onBack={() => setCheckoutStep('service')}
+            onBack={() => setCheckoutStep((currentStep) => currentStep === 'payment' ? 'customer' : 'service')}
+            onNameChange={setName}
+            onEmailChange={setEmail}
             onSelectPickupOption={handlePickupChoice}
+            onContinueService={handleServiceContinue}
+            onContinueCustomer={handleCustomerContinue}
             onSelectPaymentMethod={handlePaymentChoice}
+            onContinuePayment={handlePaymentContinue}
           />
         )}
       </AnimatePresence>
@@ -1508,6 +1551,9 @@ export default function CartPage() {
 
 function CheckoutFlowModal({
   step,
+  isSignedIn,
+  name,
+  email,
   pickupOption,
   paymentMethod,
   total,
@@ -1515,10 +1561,18 @@ function CheckoutFlowModal({
   submitting,
   onClose,
   onBack,
+  onNameChange,
+  onEmailChange,
   onSelectPickupOption,
+  onContinueService,
+  onContinueCustomer,
   onSelectPaymentMethod,
+  onContinuePayment,
 }: {
   step: CheckoutStep;
+  isSignedIn: boolean;
+  name: string;
+  email: string;
   pickupOption: PickupOption;
   paymentMethod: PaymentMethod;
   total: number;
@@ -1526,17 +1580,28 @@ function CheckoutFlowModal({
   submitting: boolean;
   onClose: () => void;
   onBack: () => void;
+  onNameChange: (value: string) => void;
+  onEmailChange: (value: string) => void;
   onSelectPickupOption: (option: PickupOption) => void;
+  onContinueService: () => void;
+  onContinueCustomer: () => void;
   onSelectPaymentMethod: (method: PaymentMethod) => void;
+  onContinuePayment: () => void;
 }) {
   const serviceModeLabel = getServiceModeLabel({ order_type: 'pickup', pickup_option: pickupOption });
+  const stepLabel = step === 'service' ? '1 of 3' : step === 'customer' ? '2 of 3' : '3 of 3';
+  const heading = step === 'service'
+    ? 'Choose order type'
+    : step === 'customer'
+      ? (isSignedIn ? 'Confirm details' : 'Guest or sign in')
+      : (isFreeOrder ? 'Place order' : 'Choose payment');
 
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[90] flex items-end justify-center bg-black/70 px-4 py-6 sm:items-center"
+      className="fixed inset-0 z-[90] flex items-center justify-center overflow-y-auto bg-black/70 px-4 py-6"
       onClick={onClose}
     >
       <motion.div
@@ -1544,16 +1609,16 @@ function CheckoutFlowModal({
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: 24, scale: 0.98 }}
         transition={{ duration: 0.18 }}
-        className="w-full max-w-md rounded-2xl border border-brand-border bg-brand-bg p-5 shadow-elevated"
+        className="max-h-[calc(100vh-3rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-brand-border bg-brand-bg p-5 shadow-elevated"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <p className="text-[11px] font-black uppercase tracking-[0.24em] text-brand-gold">
-              Step {step === 'service' ? '1 of 2' : '2 of 2'}
+              Step {stepLabel}
             </p>
             <h2 className="mt-1 text-xl font-extrabold tracking-tight text-white">
-              {step === 'service' ? 'Choose order type' : 'Choose payment'}
+              {heading}
             </h2>
           </div>
           <button
@@ -1568,7 +1633,7 @@ function CheckoutFlowModal({
         {step === 'service' ? (
           <div className="space-y-3">
             <p className="text-[13px] font-medium text-brand-text-muted">
-              Pick Dine In or Takeaway first. Payment comes next.
+              Pick Dine In or Takeaway first. Guest details come next.
             </p>
             <div className="grid grid-cols-2 gap-2.5">
               <button
@@ -1610,8 +1675,15 @@ function CheckoutFlowModal({
                 <span className="text-[11px] text-brand-text-dim">Pack it to go + ₹{TAKEAWAY_CHARGE}</span>
               </button>
             </div>
+            <button
+              onClick={onContinueService}
+              disabled={submitting}
+              className="btn-primary w-full rounded-xl py-3 text-[14px] font-black disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Continue with {pickupOption === 'dine_in' ? 'Dine In' : 'Takeaway'}
+            </button>
           </div>
-        ) : (
+        ) : step === 'customer' ? (
           <div className="space-y-4">
             <button
               onClick={onBack}
@@ -1627,9 +1699,95 @@ function CheckoutFlowModal({
               </div>
             </div>
 
+            {!isSignedIn ? (
+              <div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div className="rounded-lg border-2 border-brand-gold bg-brand-gold/10 p-3 text-left">
+                    <span className="block text-[14px] font-extrabold text-white">Continue as guest</span>
+                    <span className="mt-1 block text-[12px] font-medium text-brand-text-muted">
+                      Name and email only.
+                    </span>
+                  </div>
+                  <Link
+                    to="/auth"
+                    state={{ from: '/cart' }}
+                    className="rounded-lg border-2 border-brand-border bg-brand-surface p-3 text-left transition-colors hover:border-brand-gold/40"
+                  >
+                    <span className="block text-[14px] font-extrabold text-white">Sign in for faster checkout</span>
+                    <span className="mt-1 block text-[12px] font-medium text-brand-text-muted">
+                      Use saved details and rewards.
+                    </span>
+                  </Link>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3 rounded-lg border border-brand-gold/20 bg-brand-gold/5 p-3">
+                <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-brand-gold/10">
+                  <User size={18} className="text-brand-gold" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-[14px] font-bold text-white">Signed in for faster checkout</h3>
+                  <p className="text-[12px] text-brand-text-dim">Your receipt will go to the email below.</p>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="relative">
+                <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-text-dim" />
+                <input
+                  type="text"
+                  placeholder="Your name *"
+                  value={name}
+                  onChange={(event) => onNameChange(event.target.value)}
+                  className="input-field pl-9 text-[14px]"
+                  autoComplete="name"
+                  autoFocus={!name}
+                />
+              </div>
+              <div className="relative">
+                <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-text-dim" />
+                <input
+                  type="email"
+                  placeholder="Email for receipt *"
+                  value={email}
+                  onChange={(event) => onEmailChange(event.target.value)}
+                  className="input-field pl-9 text-[14px]"
+                  autoComplete="email"
+                />
+              </div>
+            </div>
+            <p className="text-[12px] font-medium text-brand-text-dim">
+              We will send your order receipt to this email.
+            </p>
+
+            <button
+              onClick={onContinueCustomer}
+              disabled={submitting}
+              className="btn-primary w-full rounded-xl py-3 text-[14px] font-black disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isFreeOrder ? 'Continue' : 'Continue to Payment'}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <button
+              onClick={onBack}
+              disabled={submitting}
+              className="text-[13px] font-bold text-brand-gold transition-colors hover:text-brand-gold-soft disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Back to details
+            </button>
+            <div className="rounded-xl border border-brand-border bg-brand-surface px-4 py-3">
+              <div className="flex items-center justify-between gap-3 text-[13px]">
+                <span className="font-semibold text-brand-text-muted">{serviceModeLabel}</span>
+                <span className="font-black text-brand-gold tabular-nums">₹{total.toFixed(0)}</span>
+              </div>
+            </div>
+
             {isFreeOrder ? (
               <button
-                onClick={() => onSelectPaymentMethod(paymentMethod)}
+                onClick={onContinuePayment}
                 disabled={submitting}
                 className="btn-primary w-full rounded-xl py-3 text-[14px] font-black disabled:cursor-not-allowed disabled:opacity-60"
               >
@@ -1671,13 +1829,22 @@ function CheckoutFlowModal({
                     <Wallet size={20} className={paymentMethod === 'cod' ? 'text-brand-gold' : 'text-brand-text-dim'} />
                   </div>
                   <span className={`block text-[14px] font-bold ${paymentMethod === 'cod' ? 'text-white' : 'text-brand-text-muted'}`}>
-                    Cash Counter
+                    Pay at Counter
                   </span>
                   <span className="text-[11px] text-brand-text-dim">
-                    {pickupOption === 'dine_in' ? 'Hand cash while dining' : 'Hand cash at collection'}
+                    Pay when you collect
                   </span>
                 </button>
               </div>
+            )}
+            {!isFreeOrder && (
+              <button
+                onClick={onContinuePayment}
+                disabled={submitting}
+                className="btn-primary w-full rounded-xl py-3 text-[14px] font-black disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {paymentMethod === 'card' ? 'Proceed to Online Payment' : 'Place Order and Pay at Counter'}
+              </button>
             )}
           </div>
         )}

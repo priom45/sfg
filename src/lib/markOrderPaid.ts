@@ -5,6 +5,7 @@ import {
   type Session,
 } from '@supabase/supabase-js';
 import { staffSupabase } from './supabase';
+import { sendOrderReceipt } from './orderReceipt';
 import type { CounterPaymentMethod } from '../types';
 
 interface MarkOrderPaidResponse {
@@ -385,10 +386,18 @@ async function markOrderPaidDirectly(
   const order = await fetchDirectPaymentOrder(orderId);
   await applyPaymentUpdate(order, getPaymentUpdate(order, options));
 
+  let receiptEmailSent = false;
+  try {
+    await sendOrderReceipt(order.order_id);
+    receiptEmailSent = true;
+  } catch (error) {
+    console.error('Failed to send receipt email after direct payment update', error);
+  }
+
   return {
     success: true,
     appOrderId: order.order_id,
-    receiptEmailSent: false,
+    receiptEmailSent,
   };
 }
 

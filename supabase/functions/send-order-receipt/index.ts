@@ -8,6 +8,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers":
     "Content-Type, Authorization, X-Client-Info, Apikey",
 };
+const LEGACY_CHECKOUT_PHONE_PLACEHOLDER = "0000000000";
 
 interface SmtpConfig {
   smtp_host: string;
@@ -64,6 +65,11 @@ function escapeHtml(value: string) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function getDisplayPhone(value: string | null | undefined) {
+  const trimmed = (value || "").trim();
+  return trimmed === LEGACY_CHECKOUT_PHONE_PLACEHOLDER ? "" : trimmed;
 }
 
 function toNumber(value: unknown) {
@@ -343,6 +349,15 @@ function buildEmailHtml(order: ReceiptOrder, items: ReceiptItemRow[], isConfirma
       </tr>
     `
     : "";
+  const displayPhone = getDisplayPhone(order.customer_phone);
+  const phoneHtml = displayPhone
+    ? `
+      <tr>
+        <td style="padding:0 0 10px; color:#b68b2c; font-size:13px;">Phone</td>
+        <td style="padding:0 0 10px; text-align:right; font-size:14px; font-weight:700; color:#f0e2b6;">${escapeHtml(displayPhone)}</td>
+      </tr>
+    `
+    : "";
 
   return `
     <!doctype html>
@@ -380,10 +395,7 @@ function buildEmailHtml(order: ReceiptOrder, items: ReceiptItemRow[], isConfirma
                     <td style="padding:0 0 10px; color:#b68b2c; font-size:13px;">Customer</td>
                     <td style="padding:0 0 10px; text-align:right; font-size:14px; font-weight:700; color:#f0e2b6;">${escapeHtml(order.customer_name)}</td>
                   </tr>
-                  <tr>
-                    <td style="padding:0 0 10px; color:#b68b2c; font-size:13px;">Phone</td>
-                    <td style="padding:0 0 10px; text-align:right; font-size:14px; font-weight:700; color:#f0e2b6;">${escapeHtml(order.customer_phone)}</td>
-                  </tr>
+                  ${phoneHtml}
                   <tr>
                     <td style="padding:0 0 10px; color:#b68b2c; font-size:13px;">Order ID</td>
                     <td style="padding:0 0 10px; text-align:right; font-size:14px; font-weight:700; color:#f0e2b6;">${escapeHtml(order.order_id)}</td>
@@ -463,6 +475,7 @@ function buildEmailText(order: ReceiptOrder, items: ReceiptItemRow[], isConfirma
   const paymentLabel = paymentMethodLabel(order.payment_method, order.order_type, toNumber(order.total));
   const serviceMode = serviceModeLabel(order);
   const copy = receiptEmailCopy(order, isConfirmation);
+  const displayPhone = getDisplayPhone(order.customer_phone);
   const itemLines = rows
     .map((item) => {
       const customizationLines = item.customizations
@@ -504,7 +517,7 @@ function buildEmailText(order: ReceiptOrder, items: ReceiptItemRow[], isConfirma
     "",
     `Order ID: ${order.order_id}`,
     `Customer: ${order.customer_name}`,
-    `Phone: ${order.customer_phone}`,
+    displayPhone ? `Phone: ${displayPhone}` : "",
     `Placed: ${formatPlacedAt(order.placed_at)}`,
     `Order Type: ${titleCase(order.order_type)}`,
     `Service Mode: ${serviceMode}`,

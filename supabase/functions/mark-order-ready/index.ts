@@ -29,7 +29,7 @@ async function requestReadyEmail(
     method: "POST",
     headers: {
       Authorization: `Bearer ${serviceKey}`,
-      apikey: anonKey,
+      apikey: serviceKey,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ orderId }),
