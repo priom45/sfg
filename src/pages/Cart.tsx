@@ -1588,7 +1588,9 @@ function CheckoutFlowModal({
   onSelectPaymentMethod: (method: PaymentMethod) => void;
   onContinuePayment: () => void;
 }) {
-  const serviceModeLabel = getServiceModeLabel({ order_type: 'pickup', pickup_option: pickupOption });
+  const orderTypeSummary = pickupOption === 'takeaway'
+    ? `Takeaway selected. Includes ₹${TAKEAWAY_CHARGE} takeaway charge.`
+    : 'Dine In selected. No takeaway charge.';
   const stepLabel = step === 'service' ? '1 of 3' : step === 'customer' ? '2 of 3' : '3 of 3';
   const heading = step === 'service'
     ? 'Choose order type'
@@ -1694,9 +1696,10 @@ function CheckoutFlowModal({
             </button>
             <div className="rounded-xl border border-brand-border bg-brand-surface px-4 py-3">
               <div className="flex items-center justify-between gap-3 text-[13px]">
-                <span className="font-semibold text-brand-text-muted">{serviceModeLabel}</span>
+                <span className="font-semibold text-brand-text-muted">Order total</span>
                 <span className="font-black text-brand-gold tabular-nums">₹{total.toFixed(0)}</span>
               </div>
+              <p className="mt-1 text-[11px] font-medium text-brand-text-dim">{orderTypeSummary}</p>
             </div>
 
             {!isSignedIn ? (
@@ -1780,9 +1783,10 @@ function CheckoutFlowModal({
             </button>
             <div className="rounded-xl border border-brand-border bg-brand-surface px-4 py-3">
               <div className="flex items-center justify-between gap-3 text-[13px]">
-                <span className="font-semibold text-brand-text-muted">{serviceModeLabel}</span>
+                <span className="font-semibold text-brand-text-muted">Order total</span>
                 <span className="font-black text-brand-gold tabular-nums">₹{total.toFixed(0)}</span>
               </div>
+              <p className="mt-1 text-[11px] font-medium text-brand-text-dim">{orderTypeSummary}</p>
             </div>
 
             {isFreeOrder ? (

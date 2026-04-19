@@ -50,7 +50,7 @@ class CounterOrderHttpError extends Error {
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-const GUEST_EDGE_CHECKOUT_ENABLED = import.meta.env.VITE_GUEST_EDGE_CHECKOUT_ENABLED === 'true';
+const GUEST_EDGE_CHECKOUT_ENABLED = import.meta.env.VITE_GUEST_EDGE_CHECKOUT_ENABLED !== 'false';
 
 interface CounterOrderAuthToken {
   accessToken: string;

@@ -3,7 +3,7 @@ import {
   FunctionsHttpError,
   FunctionsRelayError,
 } from '@supabase/supabase-js';
-import { supabase } from './supabase';
+import { staffSupabase } from './supabase';
 
 interface SendOrderReadyEmailResponse {
   success: boolean;
@@ -11,11 +11,11 @@ interface SendOrderReadyEmailResponse {
   error?: string;
 }
 
-async function ensureFreshReadyEmailSession() {
-  const { data: sessionData } = await supabase.auth.getSession();
+async function ensureFreshReadyEmailSession(forceRefresh = false) {
+  const { data: sessionData } = await staffSupabase.auth.getSession();
 
-  if (!sessionData.session) {
-    const { data: refreshedData, error: refreshError } = await supabase.auth.refreshSession();
+  if (forceRefresh || !sessionData.session) {
+    const { data: refreshedData, error: refreshError } = await staffSupabase.auth.refreshSession();
     if (refreshError || !refreshedData.session) {
       throw new Error('Could not send the order-ready email because the session expired. Please sign in again.');
     }
@@ -24,7 +24,7 @@ async function ensureFreshReadyEmailSession() {
 
   const expiresAtMs = sessionData.session.expires_at ? sessionData.session.expires_at * 1000 : 0;
   if (expiresAtMs && expiresAtMs - Date.now() < 60_000) {
-    const { data: refreshedData, error: refreshError } = await supabase.auth.refreshSession();
+    const { data: refreshedData, error: refreshError } = await staffSupabase.auth.refreshSession();
     if (refreshError || !refreshedData.session) {
       throw new Error('Could not refresh the session before sending the order-ready email.');
     }
@@ -78,7 +78,7 @@ async function toReadyEmailFunctionError(error: unknown) {
 }
 
 async function invokeReadyEmailFunction(orderId: string, accessToken: string) {
-  return supabase.functions.invoke<SendOrderReadyEmailResponse>(
+  return staffSupabase.functions.invoke<SendOrderReadyEmailResponse>(
     'send-order-ready-email',
     {
       body: { orderId },
@@ -95,7 +95,7 @@ export async function sendOrderReadyEmail(orderId: string) {
   let { data, error } = await invokeReadyEmailFunction(orderId, session.access_token);
 
   if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401) {
-    session = await ensureFreshReadyEmailSession();
+    session = await ensureFreshReadyEmailSession(true);
     ({ data, error } = await invokeReadyEmailFunction(orderId, session.access_token));
   }
 

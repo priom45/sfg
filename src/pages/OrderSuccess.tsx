@@ -344,9 +344,25 @@ export default function OrderSuccessPage() {
       });
       showToast('Payment completed successfully');
     } catch (paymentError) {
-      console.error('Failed to complete online payment', paymentError);
       const message = paymentError instanceof Error ? paymentError.message : 'Failed to complete online payment';
       const lowerMessage = message.toLowerCase();
+      if (lowerMessage.includes('already paid')) {
+        setOrder((currentOrder) => currentOrder && currentOrder.order_id === order.order_id
+          ? {
+              ...currentOrder,
+              payment_status: 'paid',
+              payment_verified_at: currentOrder.payment_verified_at ?? new Date().toISOString(),
+            }
+          : currentOrder);
+        updateGuestOrderSnapshot(order.order_id, {
+          payment_status: 'paid',
+          payment_verified_at: new Date().toISOString(),
+        });
+        showToast('Payment already completed');
+        return;
+      }
+
+      console.error('Failed to complete online payment', paymentError);
       const isSessionError = SESSION_KEYWORDS.some((keyword) => lowerMessage.includes(keyword));
       if (isSessionError && user) {
         navigate('/auth', { state: { from: `/order-success/${order.order_id}` }, replace: true });

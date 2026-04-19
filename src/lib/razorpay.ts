@@ -98,7 +98,7 @@ let razorpayScriptPromise: Promise<void> | null = null;
 const MISSING_RAZORPAY_FUNCTIONS_MESSAGE =
   'Online payment is not enabled on this Supabase project yet. Deploy the Razorpay Edge Functions first.';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-const GUEST_EDGE_CHECKOUT_ENABLED = import.meta.env.VITE_GUEST_EDGE_CHECKOUT_ENABLED === 'true';
+const GUEST_EDGE_CHECKOUT_ENABLED = import.meta.env.VITE_GUEST_EDGE_CHECKOUT_ENABLED !== 'false';
 export const RAZORPAY_BRAND_IMAGE =
   typeof window === 'undefined' || /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(window.location.hostname)
     ? undefined
