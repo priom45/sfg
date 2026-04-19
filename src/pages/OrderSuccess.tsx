@@ -163,9 +163,12 @@ export default function OrderSuccessPage() {
       return;
     }
 
+    if (order.payment_provider === 'razorpay' && order.payment_status !== 'failed' && order.status !== 'cancelled' && order.status !== 'expired') {
+      clearCart();
+    }
+
     if (order.payment_provider === 'razorpay' && order.payment_status === 'paid') {
       clearPendingOnlineOrder(order.order_id);
-      clearCart();
       return;
     }
 

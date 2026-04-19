@@ -532,6 +532,7 @@ export default function CartPage() {
     storePendingOnlineOrder(orderId);
     showToast(message);
     navigate(`/order-success/${orderId}`, { replace: true });
+    clearCart();
   }
 
   async function startRazorpayCheckout(customerEmail: string, checkoutPickupOption: PickupOption, checkoutTotal: number) {
