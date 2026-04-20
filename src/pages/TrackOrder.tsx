@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { Search, Phone, MessageCircle, ArrowLeft, Package, Bell, PartyPopper, Clock, Truck, ChefHat, Users, Sparkles, ArrowRight, Star, CheckCircle, Wallet, BadgeCheck, User, XCircle, MapPin, Navigation } from 'lucide-react';
+import { Search, Phone, MessageCircle, ArrowLeft, Package, Bell, PartyPopper, Clock, ChefHat, Users, Sparkles, ArrowRight, Star, CheckCircle, Wallet, BadgeCheck, User, XCircle, MapPin, Navigation } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { clearPendingOnlineOrder, readPendingOnlineOrder } from '../lib/pendingOnlineOrder';
 import { getCompletedOrderLabel, getPaymentMethodLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment, isDineInOrder } from '../lib/orderLabels';

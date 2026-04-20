@@ -184,6 +184,19 @@ export async function requestReceiptEmail(env: RazorpayEnv, orderId: string) {
   }
 }
 
+function runBackground(task: Promise<unknown>) {
+  const edgeRuntime = (globalThis as {
+    EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void };
+  }).EdgeRuntime;
+
+  if (edgeRuntime?.waitUntil) {
+    edgeRuntime.waitUntil(task);
+    return;
+  }
+
+  void task;
+}
+
 export async function fetchRazorpayPayment(
   env: RazorpayEnv,
   paymentId: string,
@@ -365,11 +378,7 @@ async function finalizeCapturedPayment(
     }
   }
 
-  const nextStatus = order.status === "expired"
-    ? "pending"
-    : order.status === "pending"
-    ? "confirmed"
-    : order.status;
+  const nextStatus = order.status === "expired" ? "pending" : order.status;
 
   const { data: updatedOrder, error: updateError } = await adminClient
     .from("orders")
@@ -394,12 +403,12 @@ async function finalizeCapturedPayment(
   let receiptEmailSent: boolean | undefined;
   if (updatedOrder) {
     receiptEmailSent = true;
-    try {
-      await requestReceiptEmail(env, order.order_id);
-    } catch (receiptError) {
-      receiptEmailSent = false;
-      console.error("Failed to send payment receipt email", receiptError);
-    }
+    runBackground(
+      requestReceiptEmail(env, order.order_id)
+        .catch((receiptError) => {
+          console.error("Failed to send payment receipt email", receiptError);
+        }),
+    );
 
     return {
       success: true,

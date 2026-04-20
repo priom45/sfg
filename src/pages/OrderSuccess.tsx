@@ -1,14 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { CheckCircle, Clock, Copy, RotateCcw, Store, Truck, ChefHat, Users, Bell, Sparkles, ArrowRight, Star, Wallet, Package, XCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clearCheckoutSuccessOrder } from '../lib/checkoutSuccess';
 import { clearPendingOnlineOrder, readPendingOnlineOrder } from '../lib/pendingOnlineOrder';
 import { supabase } from '../lib/supabase';
 import { getPaymentMethodLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment } from '../lib/orderLabels';
-import { RAZORPAY_BRAND_IMAGE, createExistingRazorpayOrder, loadRazorpayScript, reconcileRazorpayPayment, verifyRazorpayPayment } from '../lib/razorpay';
+import { RAZORPAY_BRAND_IMAGE, buildRazorpayCallbackUrl, createExistingRazorpayOrder, loadRazorpayScript, reconcileRazorpayPayment, verifyRazorpayPayment } from '../lib/razorpay';
 import { getRazorpayPrefillContact } from '../lib/checkoutCustomer';
-import type { Order, MenuItem } from '../types';
+import type { Order, MenuItem, OrderStatus } from '../types';
 import { useToast } from '../components/Toast';
 import { playOrderSound, playOrderCompleteSound, playPickupReadyAlert } from '../lib/sounds';
 import { useAuth } from '../contexts/AuthContext';
@@ -17,9 +17,24 @@ import { staggerContainer, staggerChild } from '../lib/animations';
 import { readGuestOrderSnapshot, updateGuestOrderSnapshot } from '../lib/guestOrderSnapshot';
 
 const SESSION_KEYWORDS = ['session expired', 'sign in again', 'please sign in', 'authentication failed'];
+const ORDER_STATUS_VALUES: OrderStatus[] = [
+  'pending',
+  'confirmed',
+  'preparing',
+  'packed',
+  'out_for_delivery',
+  'delivered',
+  'cancelled',
+  'expired',
+];
+
+function parseOrderStatus(value: string | null) {
+  return ORDER_STATUS_VALUES.includes(value as OrderStatus) ? value as OrderStatus : undefined;
+}
 
 export default function OrderSuccessPage() {
   const { orderId } = useParams<{ orderId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
@@ -34,6 +49,55 @@ export default function OrderSuccessPage() {
   const pollCountRef = useRef(0);
   const { clearCart } = useCart();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!orderId || searchParams.get('source') !== 'razorpay_callback') {
+      return;
+    }
+
+    const paymentState = searchParams.get('payment_state');
+    const callbackOrderStatus = parseOrderStatus(searchParams.get('order_status'));
+    const manualReview = searchParams.get('manual_review') === 'true';
+
+    if (paymentState === 'paid') {
+      const updates: Partial<Order> = {
+        payment_status: 'paid',
+        payment_provider: 'razorpay',
+        payment_verified_at: new Date().toISOString(),
+        ...(callbackOrderStatus ? { status: callbackOrderStatus } : {}),
+      };
+
+      updateGuestOrderSnapshot(orderId, updates);
+      setOrder((currentOrder) => currentOrder && currentOrder.order_id === orderId
+        ? { ...currentOrder, ...updates }
+        : currentOrder);
+      clearPendingOnlineOrder(orderId);
+      clearCart();
+      showToast(manualReview ? 'Payment received. We are reviewing your order.' : 'Payment confirmed');
+    } else if (paymentState === 'failed') {
+      const updates: Partial<Order> = {
+        payment_status: 'failed',
+        ...(callbackOrderStatus ? { status: callbackOrderStatus } : {}),
+      };
+
+      updateGuestOrderSnapshot(orderId, updates);
+      setOrder((currentOrder) => currentOrder && currentOrder.order_id === orderId
+        ? { ...currentOrder, ...updates }
+        : currentOrder);
+      clearPendingOnlineOrder(orderId);
+      showToast('Payment could not be completed.', 'error');
+    } else if (paymentState === 'pending') {
+      pollCountRef.current = 0;
+      reconciledPendingOrderRef.current = null;
+      setPaymentCheckDelayed(false);
+    }
+
+    const nextSearchParams = new URLSearchParams(searchParams);
+    ['source', 'payment_state', 'order_status', 'manual_review', 'callback_error'].forEach((key) => {
+      nextSearchParams.delete(key);
+    });
+    setSearchParams(nextSearchParams, { replace: true });
+  }, [clearCart, orderId, searchParams, setSearchParams, showToast]);
 
   useEffect(() => {
     if (orderId) {
@@ -350,6 +414,7 @@ export default function OrderSuccessPage() {
     try {
       const razorpayScriptPromise = loadRazorpayScript();
       const razorpayOrder = await createExistingRazorpayOrder(order.order_id);
+      const razorpayCallbackUrl = buildRazorpayCallbackUrl(razorpayOrder.appOrderId);
 
       await razorpayScriptPromise;
 
@@ -377,6 +442,8 @@ export default function OrderSuccessPage() {
           notes: {
             app_order_id: razorpayOrder.appOrderId,
           },
+          callback_url: razorpayCallbackUrl,
+          redirect: true,
           theme: {
             color: '#D8B24E',
           },

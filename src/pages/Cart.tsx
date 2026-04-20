@@ -30,7 +30,7 @@ import { suggestCartAddOns } from '../lib/cartSuggestions';
 import { calculateReviewRewardDiscount } from '../lib/itemReviews';
 import type { MenuItem, Order, PaymentMethod, Offer, PickupOption, ReviewRewardCoupon, SelectedCustomization } from '../types';
 import { useToast } from '../components/Toast';
-import { RAZORPAY_BRAND_IMAGE, cancelRazorpayPayment, createRazorpayOrder, loadRazorpayScript, verifyRazorpayPayment } from '../lib/razorpay';
+import { RAZORPAY_BRAND_IMAGE, buildRazorpayCallbackUrl, cancelRazorpayPayment, createRazorpayOrder, loadRazorpayScript, verifyRazorpayPayment } from '../lib/razorpay';
 import { playOrderSound } from '../lib/sounds';
 import CustomizationModal from '../components/CustomizationModal';
 
@@ -552,6 +552,7 @@ export default function CartPage() {
       reviewRewardDiscountAmount: reviewRewardDiscount,
       items: checkoutItems,
     });
+    const razorpayCallbackUrl = buildRazorpayCallbackUrl(razorpayOrder.appOrderId);
     storePendingOnlineOrder(razorpayOrder.appOrderId);
     if (!user) {
       storeGuestOrderSnapshot({
@@ -625,6 +626,8 @@ export default function CartPage() {
           notes: {
             app_order_id: razorpayOrder.appOrderId,
           },
+          callback_url: razorpayCallbackUrl,
+          redirect: true,
           theme: {
             color: '#D8B24E',
           },
