@@ -675,9 +675,35 @@ export default function CartPage() {
                 redirectToVerifiedOrder(successfulOrderId);
                 resolve();
               } catch (verificationError) {
-                console.error('Failed to verify Razorpay payment', verificationError);
-                redirectToPendingOrder(razorpayOrder.appOrderId, 'Payment received. We are verifying your order.');
-                resolve();
+                console.error('Failed to verify Razorpay payment, retrying once...', verificationError);
+                await new Promise((r) => setTimeout(r, 2000));
+                try {
+                  const retryVerification = await verifyRazorpayPayment({
+                    appOrderId: razorpayOrder.appOrderId,
+                    razorpayOrderId: response.razorpay_order_id,
+                    razorpayPaymentId: response.razorpay_payment_id,
+                    razorpaySignature: response.razorpay_signature,
+                  });
+                  const retryOrderId = retryVerification.appOrderId || razorpayOrder.appOrderId;
+                  if (retryVerification.paymentState === 'paid') {
+                    updateGuestOrderSnapshot(retryOrderId, {
+                      payment_status: 'paid',
+                      payment_provider: 'razorpay',
+                      payment_method: retryVerification.paymentMethod || 'card',
+                      payment_verified_at: new Date().toISOString(),
+                      ...(retryVerification.orderStatus ? { status: retryVerification.orderStatus as Order['status'] } : {}),
+                    });
+                    redirectToVerifiedOrder(retryOrderId);
+                    resolve();
+                    return;
+                  }
+                  redirectToPendingOrder(retryOrderId, 'Payment received. We are verifying your order.');
+                  resolve();
+                } catch (retryError) {
+                  console.error('Retry also failed, falling back to pending reconciliation', retryError);
+                  redirectToPendingOrder(razorpayOrder.appOrderId, 'Payment received. We are verifying your order.');
+                  resolve();
+                }
               }
             })();
           },

@@ -191,7 +191,7 @@ export default function OrderSuccessPage() {
     const interval = setInterval(async () => {
       pollCountRef.current += 1;
 
-      if (pollCountRef.current >= 10) {
+      if (pollCountRef.current >= 5) {
         setPaymentCheckDelayed(true);
         return;
       }
@@ -218,7 +218,7 @@ export default function OrderSuccessPage() {
       } catch (pollError) {
         console.error('Failed to poll order status', pollError);
       }
-    }, 6000);
+    }, 2500);
 
     return () => clearInterval(interval);
   }, [order, user, paymentCheckDelayed]);
@@ -242,6 +242,8 @@ export default function OrderSuccessPage() {
 
     reconciledPendingOrderRef.current = order.order_id;
     setReconcilingPayment(true);
+
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     void (async () => {
       try {
@@ -289,16 +291,25 @@ export default function OrderSuccessPage() {
           return;
         }
 
-        // paymentState === 'pending': payment not yet captured, allow retry
+        // paymentState === 'pending': schedule a direct retry in 2s without waiting for the poll
         reconciledPendingOrderRef.current = null;
+        retryTimer = setTimeout(() => {
+          setOrder((prev) => prev ? { ...prev } : prev);
+        }, 2000);
       } catch (reconciliationError) {
         console.error('Failed to reconcile Razorpay payment', reconciliationError);
-        // Reset so future order updates (realtime or poll) can trigger a retry
         reconciledPendingOrderRef.current = null;
+        retryTimer = setTimeout(() => {
+          setOrder((prev) => prev ? { ...prev } : prev);
+        }, 2000);
       } finally {
         setReconcilingPayment(false);
       }
     })();
+
+    return () => {
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [order, showToast]);
 
   async function copyOrderId() {

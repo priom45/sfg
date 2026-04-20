@@ -8,7 +8,11 @@
       "Bash(SUPABASE_ACCESS_TOKEN=sbp_448bf20e797db3638941e826ee217718c45aaa1f npx supabase functions deploy verify-razorpay-payment --project-ref mwlbodfwfpcnjliyfzey)",
       "Bash(SUPABASE_ACCESS_TOKEN=sbp_448bf20e797db3638941e826ee217718c45aaa1f npx supabase functions deploy reconcile-razorpay-payment --project-ref mwlbodfwfpcnjliyfzey)",
       "Bash(SUPABASE_ACCESS_TOKEN=sbp_448bf20e797db3638941e826ee217718c45aaa1f npx supabase functions deploy razorpay-webhook --project-ref mwlbodfwfpcnjliyfzey)",
-      "Bash(SUPABASE_ACCESS_TOKEN=sbp_448bf20e797db3638941e826ee217718c45aaa1f npx supabase functions deploy cancel-razorpay-payment --project-ref mwlbodfwfpcnjliyfzey)"
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_448bf20e797db3638941e826ee217718c45aaa1f npx supabase functions deploy cancel-razorpay-payment --project-ref mwlbodfwfpcnjliyfzey)",
+      "Bash(npm run *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173)",
+      "WebFetch(domain:localhost)",
+      "Bash(start http://localhost:5173/menu)"
     ]
   }
 }
