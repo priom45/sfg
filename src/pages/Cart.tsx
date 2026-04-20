@@ -1031,6 +1031,17 @@ export default function CartPage() {
     }
 
     const supportsCustomizations = itemHasAssignedCustomizations(menuItem, customizationAvailability);
+
+    // If item already exists in cart without customizations, increment it instead of duplicating
+    const existingItem = items.find(
+      (i) => i.menu_item.id === menuItem.id && i.customizations.length === 0
+    );
+    if (existingItem && !supportsCustomizations) {
+      updateQuantity(existingItem.id, existingItem.quantity + 1);
+      showToast(`${menuItem.name} quantity updated`);
+      return;
+    }
+
     const cartItemId = addItem(menuItem, 1, []);
     showToast(`${menuItem.name} added to cart`);
 
@@ -1039,7 +1050,7 @@ export default function CartPage() {
     }
 
     setPendingSuggestedItem({ cartItemId, menuItem, quantity: 1 });
-  }, [addItem, customizationAvailability, showToast]);
+  }, [addItem, updateQuantity, items, customizationAvailability, showToast]);
 
   if (items.length === 0) {
     if (activeCheckoutOrderId) {

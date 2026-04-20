@@ -26,10 +26,12 @@ export default function OrderSuccessPage() {
   const [specials, setSpecials] = useState<MenuItem[]>([]);
   const [payingOnline, setPayingOnline] = useState(false);
   const [reconcilingPayment, setReconcilingPayment] = useState(false);
+  const [paymentCheckDelayed, setPaymentCheckDelayed] = useState(false);
   const { showToast } = useToast();
   const prevStatusRef = useRef<string | null>(null);
   const pickupAlertPlayedRef = useRef(false);
   const reconciledPendingOrderRef = useRef<string | null>(null);
+  const pollCountRef = useRef(0);
   const { clearCart } = useCart();
   const navigate = useNavigate();
 
@@ -178,6 +180,50 @@ export default function OrderSuccessPage() {
   }, [clearCart, order]);
 
   useEffect(() => {
+    if (!order || !isAwaitingOnlinePayment(order)) {
+      pollCountRef.current = 0;
+      setPaymentCheckDelayed(false);
+      return;
+    }
+
+    if (paymentCheckDelayed) return;
+
+    const interval = setInterval(async () => {
+      pollCountRef.current += 1;
+
+      if (pollCountRef.current >= 10) {
+        setPaymentCheckDelayed(true);
+        return;
+      }
+
+      try {
+        let fresh: Order | null = null;
+
+        if (user) {
+          const { data } = await supabase
+            .from('orders')
+            .select('*')
+            .eq('user_id', user.id)
+            .eq('order_id', order.order_id)
+            .maybeSingle();
+          fresh = data as Order | null;
+        }
+
+        if (fresh && fresh.payment_status !== order.payment_status) {
+          setOrder(fresh);
+        } else if (!fresh || fresh.payment_status === 'pending') {
+          reconciledPendingOrderRef.current = null;
+          setOrder((prev) => prev ? { ...prev } : prev);
+        }
+      } catch (pollError) {
+        console.error('Failed to poll order status', pollError);
+      }
+    }, 6000);
+
+    return () => clearInterval(interval);
+  }, [order, user, paymentCheckDelayed]);
+
+  useEffect(() => {
     if (!order || !isAwaitingCounterPayment(order)) return;
     void loadRazorpayScript().catch((error) => {
       console.error('Failed to preload Razorpay checkout', error);
@@ -240,19 +286,48 @@ export default function OrderSuccessPage() {
               }
             : currentOrder);
           showToast('We could not confirm this payment.', 'error');
+          return;
         }
+
+        // paymentState === 'pending': payment not yet captured, allow retry
+        reconciledPendingOrderRef.current = null;
       } catch (reconciliationError) {
         console.error('Failed to reconcile Razorpay payment', reconciliationError);
+        // Reset so future order updates (realtime or poll) can trigger a retry
+        reconciledPendingOrderRef.current = null;
       } finally {
         setReconcilingPayment(false);
       }
     })();
   }, [order, showToast]);
 
-  function copyOrderId() {
-    if (order) {
-      navigator.clipboard.writeText(order.order_id);
+  async function copyOrderId() {
+    if (!order) return;
+    try {
+      await navigator.clipboard.writeText(order.order_id);
       showToast('Order ID copied!');
+    } catch {
+      showToast('Could not copy — please select and copy manually.', 'error');
+    }
+  }
+
+  async function handleCheckPaymentAgain() {
+    pollCountRef.current = 0;
+    reconciledPendingOrderRef.current = null;
+    setPaymentCheckDelayed(false);
+
+    if (user && order) {
+      try {
+        const { data } = await supabase
+          .from('orders')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('order_id', order.order_id)
+          .maybeSingle();
+        if (data) setOrder(data as Order);
+      } catch (err) {
+        console.error('Failed to refresh order', err);
+      }
     }
   }
 
@@ -473,14 +548,24 @@ export default function OrderSuccessPage() {
               transition={{ type: 'spring', stiffness: 300, damping: 20 }}
               className="w-20 h-20 bg-sky-500/10 border border-sky-500/20 rounded-full flex items-center justify-center mx-auto mb-6"
             >
-              <Clock size={40} className={`${reconcilingPayment ? 'text-sky-400 animate-spin' : 'text-sky-400'}`} />
+              <Clock size={40} className={reconcilingPayment ? 'text-sky-400 animate-spin' : 'text-sky-400'} />
             </motion.div>
             <h1 className="text-2xl font-extrabold tracking-tight text-white mb-2">Confirming Your Order</h1>
-            <p className="text-brand-text-muted mb-8">
+            <p className="text-brand-text-muted mb-6">
               {reconcilingPayment
-                ? 'Payment response received. We are confirming it with Razorpay. This usually takes a few seconds.'
-                : 'If your payment was completed, no extra action is needed. Your order will update automatically.'}
+                ? 'Checking with Razorpay — this usually takes a few seconds.'
+                : paymentCheckDelayed
+                  ? 'Confirmation is taking longer than usual. Your payment is safe.'
+                  : 'Payment received. Your order will update automatically.'}
             </p>
+            {paymentCheckDelayed && (
+              <button
+                onClick={() => { void handleCheckPaymentAgain(); }}
+                className="btn-primary mb-8"
+              >
+                Check Payment Status
+              </button>
+            )}
           </motion.div>
         )}
 
@@ -626,9 +711,21 @@ export default function OrderSuccessPage() {
           )}
 
           {isOnlinePaymentPending && (
-            <div className="mt-4 flex items-center justify-center gap-2 bg-sky-500/10 rounded-2xl px-4 py-3 border border-sky-500/20">
-              <Clock size={16} className={`${reconcilingPayment ? 'text-sky-400 animate-spin' : 'text-sky-400'}`} />
-              <span className="text-[14px] font-bold text-sky-400">Payment received. Confirming order...</span>
+            <div className="mt-4 flex flex-col gap-2">
+              <div className="flex items-center justify-center gap-2 bg-sky-500/10 rounded-2xl px-4 py-3 border border-sky-500/20">
+                <Clock size={16} className={reconcilingPayment ? 'text-sky-400 animate-spin' : 'text-sky-400'} />
+                <span className="text-[14px] font-bold text-sky-400">
+                  {reconcilingPayment ? 'Verifying payment...' : paymentCheckDelayed ? 'Confirmation delayed — tap below to retry' : 'Payment received. Confirming order...'}
+                </span>
+              </div>
+              {paymentCheckDelayed && (
+                <button
+                  onClick={() => { void handleCheckPaymentAgain(); }}
+                  className="w-full rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-400 text-[13px] font-bold py-2.5 hover:bg-sky-500/25 transition-colors"
+                >
+                  Check Payment Status
+                </button>
+              )}
             </div>
           )}
 

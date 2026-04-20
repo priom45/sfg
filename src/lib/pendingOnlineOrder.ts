@@ -1,5 +1,5 @@
 const PENDING_ONLINE_ORDER_STORAGE_KEY = 'supreme-waffle-pending-online-order';
-const PENDING_ONLINE_ORDER_TTL_MS = 30 * 60 * 1000;
+const PENDING_ONLINE_ORDER_TTL_MS = 4 * 60 * 60 * 1000;
 
 interface PendingOnlineOrderState {
   orderId: string;
