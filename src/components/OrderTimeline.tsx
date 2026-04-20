@@ -5,25 +5,26 @@ import { isAwaitingCounterPayment, isAwaitingOnlinePayment } from '../lib/orderL
 interface StepDef {
   status: OrderStatus;
   label: string;
+  shortLabel: string;
   pickupLabel?: string;
   icon: typeof Check;
 }
 
 const deliverySteps: StepDef[] = [
-  { status: 'pending', label: 'Order Placed', icon: Clock },
-  { status: 'confirmed', label: 'Confirmed', icon: Check },
-  { status: 'preparing', label: 'Preparing', icon: ChefHat },
-  { status: 'packed', label: 'Packed', pickupLabel: 'Ready for Pickup', icon: Package },
-  { status: 'out_for_delivery', label: 'Out for Delivery', icon: Truck },
-  { status: 'delivered', label: 'Delivered', icon: MapPin },
+  { status: 'pending',          label: 'Order Placed',      shortLabel: 'Placed',    icon: Clock },
+  { status: 'confirmed',        label: 'Confirmed',          shortLabel: 'Confirmed', icon: Check },
+  { status: 'preparing',        label: 'Preparing',          shortLabel: 'Preparing', icon: ChefHat },
+  { status: 'packed',           label: 'Packed',             shortLabel: 'Packed',    pickupLabel: 'Ready for Pickup', icon: Package },
+  { status: 'out_for_delivery', label: 'Out for Delivery',   shortLabel: 'On the Way', icon: Truck },
+  { status: 'delivered',        label: 'Delivered',          shortLabel: 'Delivered', icon: MapPin },
 ];
 
 const pickupSteps: StepDef[] = [
-  { status: 'pending', label: 'Order Placed', icon: Clock },
-  { status: 'confirmed', label: 'Confirmed', icon: Check },
-  { status: 'preparing', label: 'Preparing', icon: ChefHat },
-  { status: 'packed', label: 'Ready for Pickup', icon: Bell },
-  { status: 'delivered', label: 'Picked Up', icon: MapPin },
+  { status: 'pending',   label: 'Order Placed',    shortLabel: 'Placed',   icon: Clock },
+  { status: 'confirmed', label: 'Confirmed',        shortLabel: 'Confirmed', icon: Check },
+  { status: 'preparing', label: 'Preparing',        shortLabel: 'Preparing', icon: ChefHat },
+  { status: 'packed',    label: 'Ready for Pickup', shortLabel: 'Ready',    icon: Bell },
+  { status: 'delivered', label: 'Picked Up',        shortLabel: 'Done',     icon: MapPin },
 ];
 
 const statusIndex: Record<string, number> = {
@@ -42,6 +43,7 @@ interface Props {
   paymentProvider?: 'razorpay' | null;
   paymentStatus?: string | null;
   total?: number | null;
+  variant?: 'vertical' | 'horizontal';
 }
 
 export default function OrderTimeline({
@@ -52,6 +54,7 @@ export default function OrderTimeline({
   paymentProvider = null,
   paymentStatus = null,
   total = 0,
+  variant = 'vertical',
 }: Props) {
   if (currentStatus === 'cancelled') {
     return (
@@ -95,27 +98,39 @@ export default function OrderTimeline({
   });
   const pickupStepsForMode: StepDef[] = isDineIn
     ? [
-        { status: 'pending', label: awaitingCounterPayment ? 'Payment Pending' : awaitingOnlinePayment ? 'Payment Processing' : 'Order Placed', icon: Clock },
-        { status: 'confirmed', label: 'Confirmed', icon: Check },
-        { status: 'preparing', label: 'Preparing', icon: ChefHat },
-        { status: 'packed', label: 'Ready to Serve', icon: Bell },
-        { status: 'delivered', label: 'Served', icon: MapPin },
+        { status: 'pending',   label: awaitingCounterPayment ? 'Payment Pending' : awaitingOnlinePayment ? 'Payment Processing' : 'Order Placed', shortLabel: 'Placed', icon: Clock },
+        { status: 'confirmed', label: 'Confirmed',     shortLabel: 'Confirmed', icon: Check },
+        { status: 'preparing', label: 'Preparing',     shortLabel: 'Preparing', icon: ChefHat },
+        { status: 'packed',    label: 'Ready to Serve', shortLabel: 'Ready',   icon: Bell },
+        { status: 'delivered', label: 'Served',         shortLabel: 'Served',  icon: MapPin },
       ]
     : pickupSteps.map((step) => (
         step.status === 'pending' && awaitingCounterPayment
-          ? { ...step, label: 'Payment Pending' }
+          ? { ...step, label: 'Payment Pending', shortLabel: 'Pay' }
           : step.status === 'pending' && awaitingOnlinePayment
-            ? { ...step, label: 'Payment Processing' }
+            ? { ...step, label: 'Payment Processing', shortLabel: 'Paying' }
           : step
       ));
   const deliveryStepsForMode = deliverySteps.map((step) => (
     step.status === 'pending' && awaitingOnlinePayment
-      ? { ...step, label: 'Payment Processing' }
+      ? { ...step, label: 'Payment Processing', shortLabel: 'Paying' }
       : step
   ));
   const steps = isPickup ? pickupStepsForMode : deliveryStepsForMode;
   const idxMap = isPickup ? pickupStatusIndex : statusIndex;
   const currentIdx = idxMap[currentStatus] ?? 0;
+
+  if (variant === 'horizontal') {
+    return (
+      <HorizontalTimeline
+        steps={steps}
+        currentIdx={currentIdx}
+        isPickup={isPickup}
+        awaitingCounterPayment={awaitingCounterPayment}
+        awaitingOnlinePayment={awaitingOnlinePayment}
+      />
+    );
+  }
 
   return (
     <div className="py-4">
@@ -178,6 +193,109 @@ export default function OrderTimeline({
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+interface HorizontalTimelineProps {
+  steps: StepDef[];
+  currentIdx: number;
+  isPickup: boolean;
+  awaitingCounterPayment: boolean;
+  awaitingOnlinePayment: boolean;
+}
+
+function HorizontalTimeline({ steps, currentIdx, isPickup, awaitingCounterPayment, awaitingOnlinePayment }: HorizontalTimelineProps) {
+  const progressPct = steps.length > 1 ? (currentIdx / (steps.length - 1)) * 100 : 0;
+
+  return (
+    <div className="py-3">
+      <div className="relative flex items-start">
+        {/* Track background */}
+        <div className="absolute top-[14px] left-[14px] right-[14px] h-0.5 bg-brand-surface-strong" />
+        {/* Track fill */}
+        <div
+          className="absolute top-[14px] left-[14px] h-0.5 bg-brand-gold transition-all duration-700"
+          style={{ width: `calc(${progressPct}% * (100% - 28px) / 100)` }}
+        />
+
+        {steps.map((step, idx) => {
+          const isCompleted = idx < currentIdx;
+          const isCurrent = idx === currentIdx;
+          const Icon = step.icon;
+          const isReadyPickup = isPickup && step.status === 'packed' && isCurrent;
+
+          return (
+            <div
+              key={step.status}
+              className="flex flex-col items-center gap-1.5 relative z-10"
+              style={{ width: `${100 / steps.length}%` }}
+            >
+              <div
+                className={`w-7 h-7 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
+                  isCompleted
+                    ? 'bg-brand-gold border-brand-gold'
+                    : isCurrent
+                    ? isReadyPickup
+                      ? 'bg-brand-bg border-emerald-400 ring-2 ring-emerald-400/30'
+                      : 'bg-brand-bg border-brand-gold ring-2 ring-brand-gold/25'
+                    : 'bg-brand-surface border-brand-border'
+                }`}
+              >
+                {isCompleted
+                  ? <Check size={11} strokeWidth={3} className="text-brand-bg" />
+                  : <Icon
+                      size={11}
+                      strokeWidth={2.5}
+                      className={
+                        isCurrent
+                          ? isReadyPickup ? 'text-emerald-400' : 'text-brand-gold'
+                          : 'text-brand-text-dim'
+                      }
+                    />
+                }
+              </div>
+              <p
+                className={`text-[9px] font-semibold text-center leading-tight px-0.5 ${
+                  isCompleted
+                    ? 'text-brand-text-muted'
+                    : isCurrent
+                    ? isReadyPickup ? 'text-emerald-400' : 'text-brand-gold'
+                    : 'text-brand-text-dim'
+                }`}
+              >
+                {step.shortLabel}
+              </p>
+              {isCurrent && (
+                <div className="absolute -bottom-0.5 w-1 h-1 rounded-full bg-brand-gold animate-pulse" />
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Current step label */}
+      <div className="mt-3 text-center">
+        {(() => {
+          const step = steps[currentIdx];
+          if (!step) return null;
+          const isReadyPickup = isPickup && step.status === 'packed';
+          if (isReadyPickup) {
+            return <p className="text-[11px] font-bold text-emerald-400 animate-pulse-soft">Your order is ready!</p>;
+          }
+          if (awaitingCounterPayment && step.status === 'pending') {
+            return <p className="text-[11px] font-semibold text-amber-400">Pay at the counter to continue</p>;
+          }
+          if (awaitingOnlinePayment && step.status === 'pending') {
+            return <p className="text-[11px] font-semibold text-sky-400">Confirming your online payment...</p>;
+          }
+          return (
+            <p className="text-[11px] font-semibold text-brand-gold animate-pulse-soft">
+              {step.label} · In Progress
+            </p>
+          );
+        })()}
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { Search, Phone, MessageCircle, ArrowLeft, Package, Bell, PartyPopper, Clock, Truck, ChefHat, Users, Sparkles, ArrowRight, Star, CheckCircle, Wallet, BadgeCheck, User, XCircle } from 'lucide-react';
+import { Search, Phone, MessageCircle, ArrowLeft, Package, Bell, PartyPopper, Clock, Truck, ChefHat, Users, Sparkles, ArrowRight, Star, CheckCircle, Wallet, BadgeCheck, User, XCircle, MapPin, Navigation } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { clearPendingOnlineOrder, readPendingOnlineOrder } from '../lib/pendingOnlineOrder';
 import { getCompletedOrderLabel, getPaymentMethodLabel, getPendingPaymentLabel, getReadyOrderLabel, getServiceModeLabel, isAwaitingCounterPayment, isAwaitingOnlinePayment, isDineInOrder } from '../lib/orderLabels';
@@ -522,18 +522,7 @@ export default function TrackOrderPage() {
             )}
 
             {order.order_type === 'delivery' && order.status === 'out_for_delivery' && (
-              <div className="relative overflow-hidden rounded-2xl bg-sky-500 p-6 text-center text-white shadow-elevated animate-scale-in backdrop-blur">
-                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_50%,rgba(255,255,255,0.12),transparent)]" />
-                <div className="relative">
-                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-brand-surface-strong/80 backdrop-blur-sm">
-                    <Truck size={32} />
-                  </div>
-                  <h2 className="mb-2 text-2xl font-black">Out for Delivery!</h2>
-                  <p className="text-[14px] text-sky-100">
-                    Our delivery partner is on the way with your waffles
-                  </p>
-                </div>
-              </div>
+              <DeliveryLiveTracker order={order} />
             )}
 
             {isDelivered && (
@@ -605,6 +594,7 @@ export default function TrackOrderPage() {
                 paymentProvider={order.payment_provider}
                 paymentStatus={order.payment_status}
                 total={order.total}
+                variant={order.order_type === 'delivery' ? 'horizontal' : 'vertical'}
               />
             </div>
 
@@ -716,6 +706,164 @@ export default function TrackOrderPage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function DeliveryLiveTracker({ order }: { order: Order }) {
+  const eta = (() => {
+    if (order.confirmed_at && order.estimated_minutes) {
+      const readyAt = new Date(order.confirmed_at).getTime() + order.estimated_minutes * 60_000;
+      const deliveryMs = readyAt + 20 * 60_000;
+      const minsLeft = Math.max(5, Math.ceil((deliveryMs - Date.now()) / 60_000));
+      return minsLeft <= 45 ? `~${minsLeft} min` : '~20 min';
+    }
+    return '~20 min';
+  })();
+
+  return (
+    <div className="rounded-2xl overflow-hidden border border-sky-500/25 shadow-elevated animate-scale-in">
+      {/* Road animation */}
+      <div className="relative h-44 overflow-hidden bg-gradient-to-b from-[#0a1628] to-[#0d1f3c]">
+        {/* Stars */}
+        <div className="absolute inset-0 opacity-40">
+          {[...Array(12)].map((_, i) => (
+            <div
+              key={i}
+              className="absolute w-0.5 h-0.5 bg-white rounded-full"
+              style={{ left: `${(i * 37 + 11) % 100}%`, top: `${(i * 23 + 7) % 55}%`, opacity: 0.4 + (i % 3) * 0.2 }}
+            />
+          ))}
+        </div>
+
+        {/* Buildings silhouette */}
+        <div className="absolute bottom-16 left-0 right-0 flex items-end opacity-20">
+          {[28, 40, 22, 50, 34, 18, 44, 26, 38].map((h, i) => (
+            <div key={i} className="flex-1 bg-sky-300" style={{ height: `${h}px` }} />
+          ))}
+        </div>
+
+        {/* Road */}
+        <div className="absolute bottom-0 left-0 right-0 h-16 bg-[#1a2035]">
+          {/* Road edge lines */}
+          <div className="absolute top-0 left-0 right-0 h-0.5 bg-yellow-400/30" />
+          {/* Dashed center line - animated scrolling */}
+          <div className="absolute top-1/2 left-0 right-0 -translate-y-1/2 h-1 overflow-hidden">
+            <div className="flex animate-road-scroll w-[200%]">
+              {[...Array(24)].map((_, i) => (
+                <div key={i} className="flex-shrink-0 h-full w-8 mx-3 bg-yellow-400/50 rounded-full" />
+              ))}
+            </div>
+          </div>
+          {/* Road edge bottom */}
+          <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-sky-900/60" />
+        </div>
+
+        {/* Restaurant pin (left) */}
+        <div className="absolute left-4 bottom-12 flex flex-col items-center gap-1">
+          <div className="w-10 h-10 rounded-xl bg-brand-gold/20 border border-brand-gold/40 flex items-center justify-center text-lg">
+            🍽️
+          </div>
+          <p className="text-[8px] font-bold text-brand-gold/80 uppercase tracking-wide">Restaurant</p>
+        </div>
+
+        {/* Delivery home pin (right) */}
+        <div className="absolute right-4 bottom-12 flex flex-col items-center gap-1">
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-lg">
+            🏠
+          </div>
+          <p className="text-[8px] font-bold text-emerald-400/80 uppercase tracking-wide">Your Home</p>
+        </div>
+
+        {/* Scooter - centered, animated */}
+        <div className="absolute left-1/2 bottom-[22px] -translate-x-1/2 flex flex-col items-center animate-ride">
+          <div className="relative">
+            {/* Glow effect */}
+            <div className="absolute -inset-2 bg-sky-400/20 rounded-full blur-md" />
+            <div className="relative text-3xl">🛵</div>
+          </div>
+          {/* Dot trail */}
+          <div className="flex gap-1 mt-1">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="w-1 h-1 rounded-full bg-sky-400/60" style={{ animationDelay: `${i * 0.2}s` }} />
+            ))}
+          </div>
+        </div>
+
+        {/* Status badge */}
+        <div className="absolute top-3 left-1/2 -translate-x-1/2">
+          <div className="inline-flex items-center gap-1.5 bg-sky-500/20 border border-sky-500/40 backdrop-blur-sm rounded-full px-3 py-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
+            <span className="text-[11px] font-bold text-sky-300 uppercase tracking-wider">Live Tracking</span>
+          </div>
+        </div>
+      </div>
+
+      {/* ETA strip */}
+      <div className="bg-sky-500/10 border-y border-sky-500/20 px-5 py-4 flex items-center justify-between">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-sky-400 mb-0.5">
+            Estimated Arrival
+          </p>
+          <p className="text-3xl font-black text-white tabular-nums">{eta}</p>
+          <p className="text-[12px] text-brand-text-dim mt-0.5">
+            Your waffles are on their way!
+          </p>
+        </div>
+        <div className="w-14 h-14 rounded-2xl bg-sky-500/15 border border-sky-500/25 flex items-center justify-center">
+          <Navigation size={24} className="text-sky-400" />
+        </div>
+      </div>
+
+      {/* Delivery partner card */}
+      <div className="bg-brand-surface px-5 py-4 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3 min-w-0">
+          {/* Avatar */}
+          <div className="relative flex-shrink-0">
+            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-sky-500/30 to-sky-700/30 border-2 border-sky-500/40 flex items-center justify-center text-xl">
+              🛵
+            </div>
+            <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-brand-surface" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[14px] font-bold text-white truncate">Supreme Delivery Express</p>
+            <div className="flex items-center gap-1 mt-0.5">
+              <Star size={11} fill="#D8B24E" className="text-brand-gold flex-shrink-0" />
+              <span className="text-[12px] text-brand-text-dim font-semibold">4.9</span>
+              <span className="text-brand-text-dim text-[12px]">·</span>
+              <span className="text-[12px] text-brand-text-dim truncate">Your delivery partner</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <a
+            href="tel:+919876543210"
+            className="w-10 h-10 rounded-full border border-brand-border bg-brand-surface-light flex items-center justify-center hover:border-brand-gold/50 hover:text-brand-gold transition-colors"
+            title="Call"
+          >
+            <Phone size={16} className="text-brand-text-muted" />
+          </a>
+          <a
+            href={`https://wa.me/919876543210?text=Hi, I need help with order ${order.order_id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center hover:bg-emerald-600 transition-colors"
+            title="WhatsApp"
+          >
+            <MessageCircle size={16} className="text-white" />
+          </a>
+        </div>
+      </div>
+
+      {/* Address */}
+      {order.address && (
+        <div className="px-5 py-3 bg-brand-surface border-t border-brand-border flex items-start gap-2.5">
+          <MapPin size={14} className="text-brand-text-dim mt-0.5 flex-shrink-0" />
+          <p className="text-[12px] text-brand-text-dim font-medium leading-relaxed">
+            Delivering to: <span className="text-brand-text-muted">{order.address}</span>
+          </p>
+        </div>
+      )}
     </div>
   );
 }

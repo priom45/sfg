@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "Bash(npx tsc *)",
-      "Bash(grep -E \"\\\\.ts$\")"
+      "Bash(grep -E \"\\\\.ts$\")",
+      "Bash(npx supabase *)",
+      "Bash(cat supabase/.temp/linked-project.json)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_448bf20e797db3638941e826ee217718c45aaa1f npx supabase functions deploy verify-razorpay-payment --project-ref mwlbodfwfpcnjliyfzey)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_448bf20e797db3638941e826ee217718c45aaa1f npx supabase functions deploy reconcile-razorpay-payment --project-ref mwlbodfwfpcnjliyfzey)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_448bf20e797db3638941e826ee217718c45aaa1f npx supabase functions deploy razorpay-webhook --project-ref mwlbodfwfpcnjliyfzey)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_448bf20e797db3638941e826ee217718c45aaa1f npx supabase functions deploy cancel-razorpay-payment --project-ref mwlbodfwfpcnjliyfzey)"
     ]
   }
 }

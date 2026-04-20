@@ -28,7 +28,7 @@ import { fetchCustomizationAvailability, itemHasAssignedCustomizations, type Cus
 import { createCounterOrder } from '../lib/counterOrder';
 import { suggestCartAddOns } from '../lib/cartSuggestions';
 import { calculateReviewRewardDiscount } from '../lib/itemReviews';
-import type { MenuItem, PaymentMethod, Offer, PickupOption, ReviewRewardCoupon, SelectedCustomization } from '../types';
+import type { MenuItem, Order, PaymentMethod, Offer, PickupOption, ReviewRewardCoupon, SelectedCustomization } from '../types';
 import { useToast } from '../components/Toast';
 import { RAZORPAY_BRAND_IMAGE, cancelRazorpayPayment, createRazorpayOrder, loadRazorpayScript, verifyRazorpayPayment } from '../lib/razorpay';
 import { playOrderSound } from '../lib/sounds';
@@ -670,6 +670,7 @@ export default function CartPage() {
                   payment_provider: 'razorpay',
                   payment_method: verification.paymentMethod || 'card',
                   payment_verified_at: new Date().toISOString(),
+                  ...(verification.orderStatus ? { status: verification.orderStatus as Order['status'] } : {}),
                 });
                 redirectToVerifiedOrder(successfulOrderId);
                 resolve();

@@ -365,7 +365,11 @@ async function finalizeCapturedPayment(
     }
   }
 
-  const nextStatus = order.status === "expired" ? "pending" : order.status;
+  const nextStatus = order.status === "expired"
+    ? "pending"
+    : order.status === "pending"
+    ? "confirmed"
+    : order.status;
 
   const { data: updatedOrder, error: updateError } = await adminClient
     .from("orders")

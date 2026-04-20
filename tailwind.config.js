@@ -52,6 +52,8 @@ export default {
         'glow-gold-pulse': 'glowGoldPulse 0.6s ease-out',
         'float': 'float 3s ease-in-out infinite',
         'shimmer-sweep': 'shimmerSweep 1.8s ease-in-out infinite',
+        'ride': 'ride 1.8s ease-in-out infinite',
+        'road-scroll': 'roadScroll 1.2s linear infinite',
       },
       keyframes: {
         fadeIn: {
@@ -103,6 +105,15 @@ export default {
         shimmerSweep: {
           '0%': { backgroundPosition: '-200% 0' },
           '100%': { backgroundPosition: '200% 0' },
+        },
+        ride: {
+          '0%, 100%': { transform: 'translateY(0px) rotate(-3deg)' },
+          '40%': { transform: 'translateY(-7px) rotate(2deg)' },
+          '70%': { transform: 'translateY(-3px) rotate(-1deg)' },
+        },
+        roadScroll: {
+          '0%': { transform: 'translateX(0)' },
+          '100%': { transform: 'translateX(-50%)' },
         },
       },
     },
