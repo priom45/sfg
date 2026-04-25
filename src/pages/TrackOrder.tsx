@@ -197,7 +197,7 @@ export default function TrackOrderPage() {
 
     void (async () => {
       try {
-        const reconciliation = await reconcileRazorpayPayment(order.order_id);
+        const reconciliation = await reconcileRazorpayPayment(order.order_id, order.customer_email);
 
         if (reconciliation.paymentState === 'paid') {
           setOrder((currentOrder) => currentOrder && currentOrder.order_id === order.order_id

@@ -39,9 +39,9 @@ export default function BottomNav() {
             <Link
               key={tab.label}
               to={to}
-              className={`flex flex-1 flex-col items-center justify-center gap-1 rounded-xl py-2 transition-colors ${
+              className={`flex flex-1 flex-col items-center justify-center gap-1 rounded-2xl py-2 transition-all ${
                 active
-                  ? 'text-brand-gold'
+                  ? 'bg-white/[0.04] text-brand-gold shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
                   : 'text-brand-text-dim hover:text-brand-text-muted'
               }`}
             >
@@ -63,7 +63,7 @@ export default function BottomNav() {
                 {active && (
                   <motion.div
                     layoutId="bottomNavDot"
-                    className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 bg-brand-gold rounded-full"
+                    className="absolute -bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-brand-gold shadow-[0_0_10px_rgba(216,178,78,0.7)]"
                     transition={{ type: 'spring', stiffness: 400, damping: 30 }}
                   />
                 )}

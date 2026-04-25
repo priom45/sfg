@@ -179,6 +179,7 @@ Deno.serve(async (req: Request) => {
         source: "razorpay_callback",
         payment_state: resolution.paymentState,
         order_status: resolution.orderStatus,
+        payment_method: resolution.paymentMethod,
         manual_review: resolution.manualReview ? "true" : undefined,
       });
 
@@ -195,6 +196,7 @@ Deno.serve(async (req: Request) => {
       source: "razorpay_callback",
       payment_state: fallbackResolution.paymentState,
       order_status: fallbackResolution.orderStatus,
+      payment_method: fallbackResolution.paymentMethod,
       manual_review: fallbackResolution.manualReview ? "true" : undefined,
       callback_error: callbackFields.error_description || undefined,
     });

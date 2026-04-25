@@ -58,6 +58,7 @@ interface VerifyRazorpayPaymentPayload {
   razorpayOrderId: string;
   razorpayPaymentId: string;
   razorpaySignature: string;
+  customerEmail?: string;
 }
 
 interface VerifyRazorpayPaymentResponse {
@@ -106,6 +107,11 @@ export const RAZORPAY_BRAND_IMAGE =
 
 function getSupabaseFunctionsBaseUrl() {
   return new URL('/functions/v1/', import.meta.env.VITE_SUPABASE_URL as string);
+}
+
+function normalizeGuestCustomerEmail(value?: string) {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 }
 
 function toAbsoluteReturnUrl(returnPathOrUrl: string) {
@@ -300,12 +306,16 @@ export async function createRazorpayOrder(payload: CreateRazorpayOrderPayload) {
   return data;
 }
 
-export async function createExistingRazorpayOrder(appOrderId: string) {
+export async function createExistingRazorpayOrder(appOrderId: string, customerEmail?: string) {
   let authToken = await getFunctionAuthToken();
+  const requestBody = {
+    appOrderId,
+    customerEmail: normalizeGuestCustomerEmail(customerEmail),
+  };
   const invoke = () => customerSupabase.functions.invoke<CreateExistingRazorpayOrderResponse>(
     'create-existing-razorpay-order',
     {
-      body: { appOrderId },
+      body: requestBody,
       headers: {
         Authorization: `Bearer ${authToken.accessToken}`,
       },
@@ -339,10 +349,14 @@ export async function createExistingRazorpayOrder(appOrderId: string) {
 
 export async function verifyRazorpayPayment(payload: VerifyRazorpayPaymentPayload) {
   let authToken = await getFunctionAuthToken();
+  const requestBody = {
+    ...payload,
+    customerEmail: normalizeGuestCustomerEmail(payload.customerEmail),
+  };
   const { data, error } = await customerSupabase.functions.invoke<VerifyRazorpayPaymentResponse>(
     'verify-razorpay-payment',
     {
-      body: payload,
+      body: requestBody,
       headers: {
         Authorization: `Bearer ${authToken.accessToken}`,
       },
@@ -354,7 +368,7 @@ export async function verifyRazorpayPayment(payload: VerifyRazorpayPaymentPayloa
     const retry = await customerSupabase.functions.invoke<VerifyRazorpayPaymentResponse>(
       'verify-razorpay-payment',
       {
-        body: payload,
+        body: requestBody,
         headers: {
           Authorization: `Bearer ${authToken.accessToken}`,
         },
@@ -380,12 +394,16 @@ export async function verifyRazorpayPayment(payload: VerifyRazorpayPaymentPayloa
   return data;
 }
 
-export async function cancelRazorpayPayment(appOrderId: string) {
+export async function cancelRazorpayPayment(appOrderId: string, customerEmail?: string) {
   let authToken = await getFunctionAuthToken();
+  const requestBody = {
+    appOrderId,
+    customerEmail: normalizeGuestCustomerEmail(customerEmail),
+  };
   const { data, error } = await customerSupabase.functions.invoke<CancelRazorpayPaymentResponse>(
     'cancel-razorpay-payment',
     {
-      body: { appOrderId },
+      body: requestBody,
       headers: {
         Authorization: `Bearer ${authToken.accessToken}`,
       },
@@ -397,7 +415,7 @@ export async function cancelRazorpayPayment(appOrderId: string) {
     const retry = await customerSupabase.functions.invoke<CancelRazorpayPaymentResponse>(
       'cancel-razorpay-payment',
       {
-        body: { appOrderId },
+        body: requestBody,
         headers: {
           Authorization: `Bearer ${authToken.accessToken}`,
         },
@@ -423,12 +441,16 @@ export async function cancelRazorpayPayment(appOrderId: string) {
   return data;
 }
 
-export async function reconcileRazorpayPayment(appOrderId: string) {
+export async function reconcileRazorpayPayment(appOrderId: string, customerEmail?: string) {
   let authToken = await getFunctionAuthToken();
+  const requestBody = {
+    appOrderId,
+    customerEmail: normalizeGuestCustomerEmail(customerEmail),
+  };
   const { data, error } = await customerSupabase.functions.invoke<ReconcileRazorpayPaymentResponse>(
     'reconcile-razorpay-payment',
     {
-      body: { appOrderId },
+      body: requestBody,
       headers: {
         Authorization: `Bearer ${authToken.accessToken}`,
       },
@@ -440,7 +462,7 @@ export async function reconcileRazorpayPayment(appOrderId: string) {
     const retry = await customerSupabase.functions.invoke<ReconcileRazorpayPaymentResponse>(
       'reconcile-razorpay-payment',
       {
-        body: { appOrderId },
+        body: requestBody,
         headers: {
           Authorization: `Bearer ${authToken.accessToken}`,
         },

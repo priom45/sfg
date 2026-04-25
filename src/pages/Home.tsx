@@ -143,10 +143,20 @@ export default function Home() {
     () => Object.fromEntries(categories.map((category) => [category.id, category.slug])),
     [categories],
   );
+  const averagePrepTime = useMemo(() => {
+    if (allItems.length === 0) return 10;
+    const totalPrepTime = allItems.reduce((sum, item) => sum + (item.prep_time || 0), 0);
+    return Math.max(5, Math.round(totalPrepTime / allItems.length));
+  }, [allItems]);
   const menuItemsById = useMemo(
     () => Object.fromEntries(allItems.map((item) => [item.id, { id: item.id, category_id: item.category_id }])),
     [allItems],
   );
+  const heroStats = useMemo(() => ([
+    { value: `${categories.length || 0}+`, label: 'Flavor lanes' },
+    { value: `${allItems.length || 0}+`, label: 'Menu picks' },
+    { value: `${averagePrepTime} min`, label: 'Average prep' },
+  ]), [allItems.length, averagePrepTime, categories.length]);
   const homeSearchResults = useMemo(() => {
     const query = homeSearch.trim().toLowerCase();
     if (query.length < 2) return [];
@@ -175,8 +185,156 @@ export default function Home() {
 
   return (
     <div className="bg-brand-bg min-h-screen pb-20">
+      <section className="px-4 pt-4 pb-3">
+        <motion.div
+          className="gloss-shell hero-grid overflow-hidden rounded-[30px] px-5 py-5 sm:px-7 sm:py-7"
+          initial={{ opacity: 0, y: 24, scale: 0.985 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
+        >
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,247,214,0.18),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(113,154,84,0.2),transparent_34%)]" />
+          <div className="pointer-events-none absolute -right-10 top-6 h-32 w-32 rounded-full bg-brand-gold/20 blur-3xl animate-pulse-soft" />
+          <div className="pointer-events-none absolute -left-10 bottom-0 h-28 w-28 rounded-full bg-emerald-300/10 blur-3xl animate-float" />
+
+          <motion.div
+            className="space-y-6"
+            variants={staggerContainer}
+            initial="hidden"
+            animate="visible"
+          >
+            <motion.div variants={staggerChild} className="flex flex-wrap gap-2">
+              {[
+                { icon: Sparkles, text: 'Fresh off the iron' },
+                { icon: Flame, text: 'Golden crispy edges' },
+                { icon: Clock, text: `${averagePrepTime}-minute comfort` },
+              ].map((item) => (
+                <span key={item.text} className="gloss-chip">
+                  <item.icon size={13} className="text-brand-gold" strokeWidth={2.3} />
+                  {item.text}
+                </span>
+              ))}
+            </motion.div>
+
+            <motion.div variants={staggerChild} className="max-w-2xl">
+              <p className="section-label text-brand-gold-soft">Premium waffle studio</p>
+              <h1 className="mt-3 max-w-3xl text-[clamp(2.2rem,6vw,4.8rem)] font-black leading-[0.96] tracking-[-0.05em] text-white">
+                Glossy bites,
+                <br />
+                warm-night comfort.
+              </h1>
+              <p className="mt-4 max-w-xl text-[14px] font-medium leading-relaxed text-brand-text-muted sm:text-[15px]">
+                Handcrafted waffles, shakes, and snacky add-ons with a richer, polished storefront that feels as indulgent as the menu.
+              </p>
+            </motion.div>
+
+            <motion.div variants={staggerChild} className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-end">
+              <form onSubmit={handleHomeSearchSubmit} className="relative">
+                <div className="gloss-shell overflow-visible rounded-[24px] bg-brand-surface/55 p-2 shadow-[0_20px_48px_rgba(8,12,7,0.26)]">
+                  <div className="relative">
+                    <Search size={18} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-brand-gold" strokeWidth={2.5} />
+                    <input
+                      type="text"
+                      value={homeSearch}
+                      onChange={(event) => setHomeSearch(event.target.value)}
+                      onFocus={() => setSearchFocused(true)}
+                      onBlur={() => window.setTimeout(() => setSearchFocused(false), 120)}
+                      placeholder="Search waffles, shakes, snacks..."
+                      aria-label="Search menu items"
+                      className="w-full rounded-[18px] border border-white/10 bg-black/10 py-4 pl-12 pr-32 text-[15px] font-semibold text-white outline-none transition-colors placeholder:text-brand-text-dim focus:border-brand-gold/45"
+                    />
+                    {homeSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setHomeSearch('')}
+                        aria-label="Clear search"
+                        className="absolute right-24 top-1/2 -translate-y-1/2 rounded-lg p-1 text-brand-text-dim transition-colors hover:text-white"
+                      >
+                        <X size={17} strokeWidth={2.5} />
+                      </button>
+                    )}
+                    <button
+                      type="submit"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-[14px] bg-[linear-gradient(135deg,#F0D487_0%,#D8B24E_58%,#B88629_100%)] px-4 py-2.5 text-[12px] font-black tracking-[0.12em] text-brand-bg shadow-[0_14px_30px_rgba(216,178,78,0.18),inset_0_1px_0_rgba(255,255,255,0.3)] transition-transform hover:-translate-y-0.5"
+                    >
+                      Search
+                    </button>
+                  </div>
+                </div>
+
+                <AnimatePresence>
+                  {searchFocused && homeSearchResults.length > 0 && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                      className="gloss-shell absolute left-0 right-0 top-full z-30 mt-3 overflow-hidden rounded-[22px] shadow-elevated"
+                    >
+                      {homeSearchResults.map((item, index) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            openSearchItem(item);
+                          }}
+                          className={`flex w-full items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-white/[0.05] ${index < homeSearchResults.length - 1 ? 'border-b border-white/10' : ''}`}
+                        >
+                          <img
+                            src={normalizeImageUrl(item.image_url)}
+                            alt=""
+                            className="h-11 w-11 rounded-xl object-cover"
+                            loading="lazy"
+                            decoding="async"
+                            onError={setImageFallback}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-bold text-white">{item.name}</span>
+                            <span className="block text-xs font-semibold text-brand-gold">₹{item.price}</span>
+                          </span>
+                        </button>
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <AnimatePresence>
+                  {searchFocused && homeSearch.trim().length >= 2 && homeSearchResults.length === 0 && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                      className="gloss-shell absolute left-0 right-0 top-full z-30 mt-3 rounded-[22px] px-4 py-3 text-sm text-brand-text-muted shadow-elevated"
+                    >
+                      No instant matches found. Press <span className="font-bold text-white">Search</span> to open the full menu results for
+                      {' '}
+                      <span className="font-bold text-brand-gold">{homeSearch.trim()}</span>.
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </form>
+
+              <div className="grid grid-cols-3 gap-2">
+                {heroStats.map((stat) => (
+                  <motion.div
+                    key={stat.label}
+                    variants={staggerChild}
+                    className="rounded-[20px] border border-white/10 bg-black/10 px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-xl"
+                  >
+                    <div className="gloss-dot mb-3" />
+                    <p className="text-[20px] font-black leading-none text-white sm:text-[24px]">{stat.value}</p>
+                    <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-text-dim">{stat.label}</p>
+                  </motion.div>
+                ))}
+              </div>
+            </motion.div>
+          </motion.div>
+        </motion.div>
+      </section>
+
       {offers.length > 0 && (
-        <section className="px-4 pt-4 pb-2">
+        <section className="px-4 pt-1 pb-2">
           <OfferCarousel
             offers={offers}
             categorySlugById={categorySlugById}
@@ -185,93 +343,15 @@ export default function Home() {
         </section>
       )}
 
-      <motion.div
-        className="px-4 py-2"
-        variants={staggerContainer}
-        initial="hidden"
-        animate="visible"
-      >
-        <div className="flex items-center gap-3 text-[12px] font-semibold text-brand-text-dim">
-          {[
-            { icon: Clock, text: '10-min prep' },
-            { icon: Sparkles, text: 'Fresh & Handcrafted' },
-          ].map((item, i) => (
-            <motion.div key={item.text} variants={staggerChild} className="flex items-center gap-1.5 whitespace-nowrap">
-              {i > 0 && <span className="text-brand-gold-muted mr-1">|</span>}
-              <item.icon size={13} className="text-brand-gold-muted flex-shrink-0" strokeWidth={2.2} />
-              <span>{item.text}</span>
-            </motion.div>
-          ))}
-        </div>
-      </motion.div>
-
-      <section className="px-4 py-2">
-        <form onSubmit={handleHomeSearchSubmit} className="relative mx-auto max-w-2xl">
-          <div className="relative">
-            <Search size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-brand-gold" strokeWidth={2.5} />
-            <input
-              type="text"
-              value={homeSearch}
-              onChange={(event) => setHomeSearch(event.target.value)}
-              onFocus={() => setSearchFocused(true)}
-              onBlur={() => window.setTimeout(() => setSearchFocused(false), 120)}
-              placeholder="Search waffles, shakes, snacks..."
-              aria-label="Search menu items"
-              className="w-full rounded-lg border border-brand-border bg-brand-surface py-3 pl-11 pr-28 text-[15px] font-semibold text-white outline-none transition-colors placeholder:text-brand-text-dim focus:border-brand-gold"
-            />
-            {homeSearch && (
-              <button
-                type="button"
-                onClick={() => setHomeSearch('')}
-                aria-label="Clear search"
-                className="absolute right-24 top-1/2 -translate-y-1/2 rounded-lg p-1 text-brand-text-dim transition-colors hover:text-white"
-              >
-                <X size={17} strokeWidth={2.5} />
-              </button>
-            )}
-            <button
-              type="submit"
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg bg-brand-gold px-4 py-2 text-[12px] font-black text-brand-bg transition-colors hover:brightness-110"
-            >
-              Search
-            </button>
-          </div>
-
-          {searchFocused && homeSearchResults.length > 0 && (
-            <div className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-lg border border-brand-border bg-brand-surface shadow-elevated">
-              {homeSearchResults.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    openSearchItem(item);
-                  }}
-                  className="flex w-full items-center gap-3 border-b border-brand-border px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-brand-surface-light/70"
-                >
-                  <img
-                    src={normalizeImageUrl(item.image_url)}
-                    alt=""
-                    className="h-10 w-10 rounded-lg object-cover"
-                    loading="lazy"
-                    decoding="async"
-                    onError={setImageFallback}
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-bold text-white">{item.name}</span>
-                    <span className="block text-xs font-semibold text-brand-gold">₹{item.price}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </form>
-      </section>
-
       {categories.length > 0 && (
         <ScrollReveal>
           <section className="px-4 pt-3 pb-1">
-            <h2 className="text-[18px] font-bold text-white mb-3">What are you craving?</h2>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="section-label">Pick a lane</p>
+                <h2 className="mt-1 text-[18px] font-bold text-white">What are you craving?</h2>
+              </div>
+            </div>
             <motion.div
               className="flex gap-3 overflow-x-auto scrollbar-hide pb-1"
               variants={staggerContainer}
@@ -283,16 +363,16 @@ export default function Home() {
                 <motion.div key={cat.id} variants={staggerChild}>
                   <Link
                     to={`/menu?category=${cat.slug}`}
-                    className="flex w-[84px] flex-shrink-0 flex-col items-center gap-1.5 group"
+                    className="group flex w-[88px] flex-shrink-0 flex-col items-center gap-2"
                   >
-                    <div className="w-[68px] h-[68px] rounded-full overflow-hidden border-2 border-brand-border group-hover:border-brand-gold/50 transition-all">
+                    <div className="glow-border h-[72px] w-[72px] overflow-hidden rounded-full border border-white/10 bg-white/[0.03] p-1 transition-all group-hover:-translate-y-1 group-hover:border-brand-gold/40">
                       <img
                         src={normalizeImageUrl(cat.image_url)}
                         alt={`${cat.name} waffle category`}
                         loading="lazy"
                         decoding="async"
                         onError={setImageFallback}
-                        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                        className="h-full w-full rounded-full object-cover transition-transform duration-500 group-hover:scale-110"
                       />
                     </div>
                     <span
@@ -411,7 +491,7 @@ function HorizontalRail({
 
   return (
     <section className="pt-4 pb-1">
-      <div className="px-4 flex items-center justify-between mb-3">
+      <div className="mb-3 flex items-center justify-between px-4">
         <div className="flex items-center gap-2">
           {icon}
           <div>
@@ -421,7 +501,7 @@ function HorizontalRail({
             )}
           </div>
         </div>
-        <Link to={linkTo} className="text-brand-gold text-[13px] font-bold flex items-center gap-0.5 hover:gap-1.5 transition-all">
+        <Link to={linkTo} className="gloss-chip text-brand-gold transition-all hover:gap-1.5">
           See All <ChevronRight size={15} strokeWidth={2.5} />
         </Link>
       </div>
@@ -439,7 +519,7 @@ function HorizontalRail({
         {canScrollLeft && (
           <button
             onClick={() => scroll('left')}
-            className="hidden lg:flex absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 bg-brand-surface border border-brand-border rounded-full items-center justify-center text-white hover:bg-brand-surface-light opacity-0 group-hover/rail:opacity-100 transition-all shadow-elevated z-10"
+            className="absolute left-2 top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-brand-surface/85 text-white opacity-0 shadow-elevated backdrop-blur-xl transition-all hover:bg-brand-surface-light group-hover/rail:opacity-100 lg:flex"
           >
             <ChevronLeft size={18} strokeWidth={2.5} />
           </button>
@@ -447,7 +527,7 @@ function HorizontalRail({
         {canScrollRight && (
           <button
             onClick={() => scroll('right')}
-            className="hidden lg:flex absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 bg-brand-surface border border-brand-border rounded-full items-center justify-center text-white hover:bg-brand-surface-light opacity-0 group-hover/rail:opacity-100 transition-all shadow-elevated z-10"
+            className="absolute right-2 top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-brand-surface/85 text-white opacity-0 shadow-elevated backdrop-blur-xl transition-all hover:bg-brand-surface-light group-hover/rail:opacity-100 lg:flex"
           >
             <ChevronRight size={18} strokeWidth={2.5} />
           </button>

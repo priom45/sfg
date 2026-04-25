@@ -22,6 +22,7 @@ interface VerifyBody {
   razorpayOrderId?: string;
   razorpayPaymentId?: string;
   razorpaySignature?: string;
+  customerEmail?: string;
 }
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
@@ -47,6 +48,7 @@ Deno.serve(async (req: Request) => {
     const razorpayOrderId = body.razorpayOrderId?.trim() || "";
     const razorpayPaymentId = body.razorpayPaymentId?.trim() || "";
     const razorpaySignature = body.razorpaySignature?.trim() || "";
+    const normalizedCustomerEmail = body.customerEmail?.trim().toLowerCase() || "";
 
     if (!appOrderId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
       return jsonResponse({ success: false, error: "Payment verification details are required" }, 400);
@@ -80,7 +82,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: order, error: orderError } = await adminClient
       .from("orders")
-      .select("id, order_id, user_id, razorpay_order_id, payment_status, payment_provider, payment_method, razorpay_payment_id, razorpay_signature, payment_verified_at, review_reward_coupon_id, review_reward_discount_amount, inventory_reserved, status")
+      .select("id, order_id, user_id, customer_email, razorpay_order_id, payment_status, payment_provider, payment_method, razorpay_payment_id, razorpay_signature, payment_verified_at, review_reward_coupon_id, review_reward_discount_amount, inventory_reserved, status")
       .eq("order_id", appOrderId)
       .maybeSingle();
 
@@ -88,12 +90,24 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: false, error: "Order not found" }, 404);
     }
 
-    if (order.user_id && order.user_id !== user?.id) {
-      return jsonResponse({ success: false, error: "Order access denied" }, 403);
+    const orderCustomerEmail = order.customer_email?.trim().toLowerCase() || "";
+
+    if (order.user_id) {
+      if (order.user_id !== user?.id) {
+        return jsonResponse({ success: false, error: "Order not found" }, 404);
+      }
+    } else if (!normalizedCustomerEmail || !orderCustomerEmail || orderCustomerEmail !== normalizedCustomerEmail) {
+      return jsonResponse({ success: false, error: "Order not found" }, 404);
     }
 
     if (order.payment_status === "paid") {
-      return jsonResponse({ success: true, appOrderId: order.order_id });
+      return jsonResponse({
+        success: true,
+        appOrderId: order.order_id,
+        paymentState: "paid",
+        orderStatus: order.status,
+        paymentMethod: order.payment_method === "upi" ? "upi" : "card",
+      });
     }
 
     if (!order.razorpay_order_id || order.razorpay_order_id !== razorpayOrderId) {

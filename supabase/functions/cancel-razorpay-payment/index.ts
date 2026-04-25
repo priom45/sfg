@@ -21,6 +21,7 @@ const corsHeaders = {
 
 interface CancelBody {
   appOrderId?: string;
+  customerEmail?: string;
 }
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
@@ -41,8 +42,9 @@ Deno.serve(async (req: Request) => {
 
   try {
     const authHeader = req.headers.get("Authorization");
-    const { appOrderId } = await req.json() as CancelBody;
+    const { appOrderId, customerEmail } = await req.json() as CancelBody;
     const normalizedOrderId = appOrderId?.trim() || "";
+    const normalizedCustomerEmail = customerEmail?.trim().toLowerCase() || "";
 
     if (!normalizedOrderId) {
       return jsonResponse({ success: false, error: "appOrderId is required" }, 400);
@@ -76,7 +78,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: order, error: orderError } = await adminClient
       .from("orders")
-      .select("id, order_id, user_id, payment_provider, payment_status, payment_method, razorpay_order_id, razorpay_payment_id, razorpay_signature, payment_verified_at, review_reward_coupon_id, review_reward_discount_amount, inventory_reserved, status")
+      .select("id, order_id, user_id, customer_email, payment_provider, payment_status, payment_method, razorpay_order_id, razorpay_payment_id, razorpay_signature, payment_verified_at, review_reward_coupon_id, review_reward_discount_amount, inventory_reserved, status")
       .eq("order_id", normalizedOrderId)
       .maybeSingle();
 
@@ -84,8 +86,14 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: true, appOrderId: normalizedOrderId });
     }
 
-    if (order.user_id && order.user_id !== user?.id) {
-      return jsonResponse({ success: false, error: "Order access denied" }, 403);
+    const orderCustomerEmail = order.customer_email?.trim().toLowerCase() || "";
+
+    if (order.user_id) {
+      if (order.user_id !== user?.id) {
+        return jsonResponse({ success: false, error: "Order not found" }, 404);
+      }
+    } else if (!normalizedCustomerEmail || !orderCustomerEmail || orderCustomerEmail !== normalizedCustomerEmail) {
+      return jsonResponse({ success: false, error: "Order not found" }, 404);
     }
 
     if (order.payment_provider !== "razorpay" || order.payment_status === "paid") {

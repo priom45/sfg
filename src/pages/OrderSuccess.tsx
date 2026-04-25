@@ -32,6 +32,10 @@ function parseOrderStatus(value: string | null) {
   return ORDER_STATUS_VALUES.includes(value as OrderStatus) ? value as OrderStatus : undefined;
 }
 
+function parseRazorpayPaymentMethod(value: string | null) {
+  return value === 'upi' || value === 'card' ? value : undefined;
+}
+
 export default function OrderSuccessPage() {
   const { orderId } = useParams<{ orderId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -57,6 +61,7 @@ export default function OrderSuccessPage() {
 
     const paymentState = searchParams.get('payment_state');
     const callbackOrderStatus = parseOrderStatus(searchParams.get('order_status'));
+    const callbackPaymentMethod = parseRazorpayPaymentMethod(searchParams.get('payment_method'));
     const manualReview = searchParams.get('manual_review') === 'true';
 
     if (paymentState === 'paid') {
@@ -64,6 +69,7 @@ export default function OrderSuccessPage() {
         payment_status: 'paid',
         payment_provider: 'razorpay',
         payment_verified_at: new Date().toISOString(),
+        ...(callbackPaymentMethod ? { payment_method: callbackPaymentMethod } : {}),
         ...(callbackOrderStatus ? { status: callbackOrderStatus } : {}),
       };
 
@@ -93,7 +99,7 @@ export default function OrderSuccessPage() {
     }
 
     const nextSearchParams = new URLSearchParams(searchParams);
-    ['source', 'payment_state', 'order_status', 'manual_review', 'callback_error'].forEach((key) => {
+    ['source', 'payment_state', 'order_status', 'payment_method', 'manual_review', 'callback_error'].forEach((key) => {
       nextSearchParams.delete(key);
     });
     setSearchParams(nextSearchParams, { replace: true });
@@ -311,7 +317,7 @@ export default function OrderSuccessPage() {
 
     void (async () => {
       try {
-        const reconciliation = await reconcileRazorpayPayment(order.order_id);
+        const reconciliation = await reconcileRazorpayPayment(order.order_id, order.customer_email);
 
         if (reconciliation.paymentState === 'paid') {
           updateGuestOrderSnapshot(order.order_id, {
@@ -413,7 +419,7 @@ export default function OrderSuccessPage() {
 
     try {
       const razorpayScriptPromise = loadRazorpayScript();
-      const razorpayOrder = await createExistingRazorpayOrder(order.order_id);
+      const razorpayOrder = await createExistingRazorpayOrder(order.order_id, order.customer_email);
       const razorpayCallbackUrl = buildRazorpayCallbackUrl(razorpayOrder.appOrderId);
 
       await razorpayScriptPromise;
@@ -423,7 +429,11 @@ export default function OrderSuccessPage() {
         throw new Error('Razorpay checkout is unavailable');
       }
 
-      const paymentMethod = await new Promise<'upi' | 'card' | undefined>((resolve, reject) => {
+      const verificationResult = await new Promise<{
+        paymentMethod?: 'upi' | 'card';
+        paymentState?: 'paid' | 'pending' | 'failed';
+        orderStatus?: string;
+      }>((resolve, reject) => {
         let paymentFinalized = false;
 
         const checkout = new RazorpayCheckout({
@@ -468,8 +478,17 @@ export default function OrderSuccessPage() {
                   razorpayOrderId: response.razorpay_order_id,
                   razorpayPaymentId: response.razorpay_payment_id,
                   razorpaySignature: response.razorpay_signature,
+                  customerEmail: razorpayOrder.customerEmail,
                 });
-                resolve(verification.paymentMethod);
+                if (verification.paymentState === 'failed') {
+                  reject(new Error(verification.error || 'Payment verification failed'));
+                  return;
+                }
+                resolve({
+                  paymentMethod: verification.paymentMethod,
+                  paymentState: verification.paymentState,
+                  orderStatus: verification.orderStatus,
+                });
               } catch (verificationError) {
                 reject(verificationError instanceof Error ? verificationError : new Error('Payment verification failed'));
               }
@@ -486,17 +505,40 @@ export default function OrderSuccessPage() {
         checkout.open();
       });
 
+      const resolvedPaymentMethod = verificationResult.paymentMethod === 'upi' ? 'upi' : 'card';
+      const resolvedOrderStatus = verificationResult.orderStatus as Order['status'] | undefined;
+
+      if (verificationResult.paymentState === 'pending') {
+        setOrder((currentOrder) => currentOrder ? {
+          ...currentOrder,
+          payment_status: 'pending',
+          payment_provider: 'razorpay',
+          payment_method: resolvedPaymentMethod,
+          ...(resolvedOrderStatus ? { status: resolvedOrderStatus } : {}),
+        } : currentOrder);
+        updateGuestOrderSnapshot(order.order_id, {
+          payment_status: 'pending',
+          payment_provider: 'razorpay',
+          payment_method: resolvedPaymentMethod,
+          ...(resolvedOrderStatus ? { status: resolvedOrderStatus } : {}),
+        });
+        showToast('Payment received. We are verifying your order.');
+        return;
+      }
+
       setOrder((currentOrder) => currentOrder ? {
         ...currentOrder,
         payment_status: 'paid',
         payment_provider: 'razorpay',
-        payment_method: paymentMethod === 'upi' ? 'upi' : 'card',
+        payment_method: resolvedPaymentMethod,
+        ...(resolvedOrderStatus ? { status: resolvedOrderStatus } : {}),
       } : currentOrder);
       updateGuestOrderSnapshot(order.order_id, {
         payment_status: 'paid',
         payment_provider: 'razorpay',
-        payment_method: paymentMethod === 'upi' ? 'upi' : 'card',
+        payment_method: resolvedPaymentMethod,
         payment_verified_at: new Date().toISOString(),
+        ...(resolvedOrderStatus ? { status: resolvedOrderStatus } : {}),
       });
       showToast('Payment completed successfully');
     } catch (paymentError) {
@@ -507,11 +549,13 @@ export default function OrderSuccessPage() {
           ? {
               ...currentOrder,
               payment_status: 'paid',
+              payment_provider: 'razorpay',
               payment_verified_at: currentOrder.payment_verified_at ?? new Date().toISOString(),
             }
           : currentOrder);
         updateGuestOrderSnapshot(order.order_id, {
           payment_status: 'paid',
+          payment_provider: 'razorpay',
           payment_verified_at: new Date().toISOString(),
         });
         showToast('Payment already completed');
