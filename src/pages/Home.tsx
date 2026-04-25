@@ -168,10 +168,25 @@ export default function Home() {
     [allItems],
   );
   const heroStats = useMemo(() => ([
-    { value: `${categories.length || 0}+`, label: 'Flavor lanes' },
+    { value: `${categories.length || 0}+`, label: 'Menu lanes' },
     { value: `${allItems.length || 0}+`, label: 'Menu picks' },
-    { value: `${averagePrepTime} min`, label: 'Average prep' },
+    { value: `${averagePrepTime} min`, label: 'Avg prep' },
   ]), [allItems.length, averagePrepTime, categories.length]);
+  const heroQuickLinks = useMemo(() => {
+    if (categories.length > 0) {
+      return categories.slice(0, 4).map((category) => ({
+        label: category.name,
+        to: `/menu?category=${category.slug}`,
+      }));
+    }
+
+    return [
+      { label: 'Waffles', to: '/menu?search=waffle' },
+      { label: 'Shakes', to: '/menu?search=shake' },
+      { label: 'Combos', to: '/menu?search=combo' },
+      { label: 'Snacks', to: '/menu?search=fries' },
+    ];
+  }, [categories]);
   const homeSearchResults = useMemo(() => {
     const query = homeSearch.trim().toLowerCase();
     if (query.length < 2) return [];
@@ -202,7 +217,7 @@ export default function Home() {
     <div className="bg-brand-bg min-h-screen pb-20">
       <section className="px-4 pt-4 pb-3">
         <motion.div
-          className="gloss-shell hero-grid overflow-hidden rounded-[30px] px-5 py-5 sm:px-7 sm:py-7"
+          className="gloss-shell hero-grid overflow-hidden rounded-[30px] px-4 py-4 sm:px-7 sm:py-7"
           initial={{ opacity: 0, y: 24, scale: 0.985 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
@@ -212,7 +227,7 @@ export default function Home() {
           <div className="pointer-events-none absolute -left-10 bottom-0 h-28 w-28 rounded-full bg-emerald-300/10 blur-3xl animate-float" />
 
           <motion.div
-            className="space-y-6"
+            className="space-y-4"
             variants={staggerContainer}
             initial="hidden"
             animate="visible"
@@ -220,92 +235,106 @@ export default function Home() {
             <h1 className="sr-only">The Supreme Waffle menu with waffles, shakes, and snacks in Vijayawada</h1>
 
             <motion.div variants={staggerChild} className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-end">
-              <form onSubmit={handleHomeSearchSubmit} className="relative">
-                <div className="gloss-shell overflow-visible rounded-[24px] bg-brand-surface/55 p-2 shadow-[0_20px_48px_rgba(8,12,7,0.26)]">
-                  <div className="relative">
-                    <Search size={18} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-brand-gold" strokeWidth={2.5} />
-                    <input
-                      type="text"
-                      value={homeSearch}
-                      onChange={(event) => setHomeSearch(event.target.value)}
-                      onFocus={() => setSearchFocused(true)}
-                      onBlur={() => window.setTimeout(() => setSearchFocused(false), 120)}
-                      placeholder="Search waffles, shakes, snacks..."
-                      aria-label="Search menu items"
-                      className="w-full rounded-[18px] border border-white/10 bg-black/10 py-4 pl-12 pr-32 text-[15px] font-semibold text-white outline-none transition-colors placeholder:text-brand-text-dim focus:border-brand-gold/45"
-                    />
-                    {homeSearch && (
-                      <button
-                        type="button"
-                        onClick={() => setHomeSearch('')}
-                        aria-label="Clear search"
-                        className="absolute right-24 top-1/2 -translate-y-1/2 rounded-lg p-1 text-brand-text-dim transition-colors hover:text-white"
-                      >
-                        <X size={17} strokeWidth={2.5} />
-                      </button>
-                    )}
-                    <button
-                      type="submit"
-                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-[14px] bg-[linear-gradient(135deg,#F0D487_0%,#D8B24E_58%,#B88629_100%)] px-4 py-2.5 text-[12px] font-black tracking-[0.12em] text-brand-bg shadow-[0_14px_30px_rgba(216,178,78,0.18),inset_0_1px_0_rgba(255,255,255,0.3)] transition-transform hover:-translate-y-0.5"
-                    >
-                      Search
-                    </button>
-                  </div>
-                </div>
-
-                <AnimatePresence>
-                  {searchFocused && homeSearchResults.length > 0 && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-                      className="gloss-shell absolute left-0 right-0 top-full z-30 mt-3 overflow-hidden rounded-[22px] shadow-elevated"
-                    >
-                      {homeSearchResults.map((item, index) => (
+              <div className="space-y-3">
+                <form onSubmit={handleHomeSearchSubmit} className="relative">
+                  <div className="gloss-shell overflow-visible rounded-[24px] bg-brand-surface/55 p-2 shadow-[0_20px_48px_rgba(8,12,7,0.26)]">
+                    <div className="flex items-center gap-2 rounded-[18px] border border-white/10 bg-black/10 px-3 py-2.5 sm:gap-3 sm:px-4 sm:py-3">
+                      <Search size={18} className="shrink-0 text-brand-gold" strokeWidth={2.5} />
+                      <input
+                        type="text"
+                        value={homeSearch}
+                        onChange={(event) => setHomeSearch(event.target.value)}
+                        onFocus={() => setSearchFocused(true)}
+                        onBlur={() => window.setTimeout(() => setSearchFocused(false), 120)}
+                        placeholder="Search waffles, shakes..."
+                        aria-label="Search menu items"
+                        className="min-w-0 flex-1 bg-transparent text-[14px] font-semibold text-white outline-none placeholder:text-brand-text-dim sm:text-[15px]"
+                      />
+                      {homeSearch && (
                         <button
-                          key={item.id}
                           type="button"
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                            openSearchItem(item);
-                          }}
-                          className={`flex w-full items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-white/[0.05] ${index < homeSearchResults.length - 1 ? 'border-b border-white/10' : ''}`}
+                          onClick={() => setHomeSearch('')}
+                          aria-label="Clear search"
+                          className="shrink-0 rounded-lg p-1 text-brand-text-dim transition-colors hover:text-white"
                         >
-                          <img
-                            src={normalizeImageUrl(item.image_url)}
-                            alt=""
-                            className="h-11 w-11 rounded-xl object-cover"
-                            loading="lazy"
-                            decoding="async"
-                            onError={setImageFallback}
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-bold text-white">{item.name}</span>
-                            <span className="block text-xs font-semibold text-brand-gold">₹{item.price}</span>
-                          </span>
+                          <X size={17} strokeWidth={2.5} />
                         </button>
-                      ))}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                      )}
+                      <button
+                        type="submit"
+                        className="shrink-0 rounded-[14px] bg-[linear-gradient(135deg,#F0D487_0%,#D8B24E_58%,#B88629_100%)] px-3 py-2.5 text-[11px] font-black tracking-[0.12em] text-brand-bg shadow-[0_14px_30px_rgba(216,178,78,0.18),inset_0_1px_0_rgba(255,255,255,0.3)] transition-transform hover:-translate-y-0.5 sm:px-4 sm:text-[12px]"
+                      >
+                        Search
+                      </button>
+                    </div>
+                  </div>
 
-                <AnimatePresence>
-                  {searchFocused && homeSearch.trim().length >= 2 && homeSearchResults.length === 0 && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-                      className="gloss-shell absolute left-0 right-0 top-full z-30 mt-3 rounded-[22px] px-4 py-3 text-sm text-brand-text-muted shadow-elevated"
+                  <AnimatePresence>
+                    {searchFocused && homeSearchResults.length > 0 && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                        transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                        className="gloss-shell absolute left-0 right-0 top-full z-30 mt-3 overflow-hidden rounded-[22px] shadow-elevated"
+                      >
+                        {homeSearchResults.map((item, index) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              openSearchItem(item);
+                            }}
+                            className={`flex w-full items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-white/[0.05] ${index < homeSearchResults.length - 1 ? 'border-b border-white/10' : ''}`}
+                          >
+                            <img
+                              src={normalizeImageUrl(item.image_url)}
+                              alt=""
+                              className="h-11 w-11 rounded-xl object-cover"
+                              loading="lazy"
+                              decoding="async"
+                              onError={setImageFallback}
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-bold text-white">{item.name}</span>
+                              <span className="block text-xs font-semibold text-brand-gold">₹{item.price}</span>
+                            </span>
+                          </button>
+                        ))}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <AnimatePresence>
+                    {searchFocused && homeSearch.trim().length >= 2 && homeSearchResults.length === 0 && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                        transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                        className="gloss-shell absolute left-0 right-0 top-full z-30 mt-3 rounded-[22px] px-4 py-3 text-sm text-brand-text-muted shadow-elevated"
+                      >
+                        No instant matches found. Press <span className="font-bold text-white">Search</span> to open the full menu results for
+                        {' '}
+                        <span className="font-bold text-brand-gold">{homeSearch.trim()}</span>.
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </form>
+
+                <div className="flex flex-wrap gap-2">
+                  {heroQuickLinks.map((link) => (
+                    <Link
+                      key={link.to}
+                      to={link.to}
+                      className="gloss-chip max-w-full px-3.5 py-2 text-white transition-colors hover:text-brand-gold"
                     >
-                      No instant matches found. Press <span className="font-bold text-white">Search</span> to open the full menu results for
-                      {' '}
-                      <span className="font-bold text-brand-gold">{homeSearch.trim()}</span>.
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </form>
+                      <span className="truncate">{link.label}</span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
 
               <div className="grid grid-cols-3 gap-2">
                 {heroStats.map((stat) => (
@@ -315,8 +344,8 @@ export default function Home() {
                     className="rounded-[20px] border border-white/10 bg-black/10 px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-xl"
                   >
                     <div className="gloss-dot mb-3" />
-                    <p className="text-[20px] font-black leading-none text-white sm:text-[24px]">{stat.value}</p>
-                    <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-text-dim">{stat.label}</p>
+                    <p className="text-[18px] font-black leading-none text-white sm:text-[24px]">{stat.value}</p>
+                    <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-brand-text-dim sm:text-[11px]">{stat.label}</p>
                   </motion.div>
                 ))}
               </div>

@@ -51,20 +51,20 @@ export default function Header() {
   }
 
   return (
-    <header className="sticky top-0 z-50 pt-3">
-      <div className="section-padding">
-        <div className="gloss-shell glow-border flex h-[60px] items-center justify-between gap-3 rounded-[24px] px-4 sm:px-5 lg:h-[72px]">
+    <header className="sticky top-0 z-50 px-2 pt-2.5 sm:px-0 sm:pt-3">
+      <div className="mx-auto w-full max-w-7xl px-0 sm:px-6 lg:px-8">
+        <div className="gloss-shell glow-border inline-flex h-[56px] w-fit items-center rounded-[22px] px-2.5 sm:flex sm:h-[60px] sm:w-full sm:justify-between sm:px-5 lg:h-[72px]">
           <div className="flex min-w-0 items-center gap-4 lg:gap-6">
             <Link
               to="/"
-              className="flex flex-shrink-0 items-center rounded-[18px] border border-white/10 bg-black/10 px-3 py-2 backdrop-blur-xl transition-transform duration-300 hover:scale-[1.02]"
+              className="flex flex-shrink-0 items-center rounded-[16px] border border-white/10 bg-black/10 px-2 py-1.5 backdrop-blur-xl transition-transform duration-300 hover:scale-[1.02] sm:rounded-[18px] sm:px-3 sm:py-2"
               aria-label="The Supreme Waffle home"
             >
               <img
                 src="https://res.cloudinary.com/dlkovvlud/image/upload/v1771590689/Screenshot_2026-02-20_175222-removebg-preview_ufalk6.png"
                 alt="The Supreme Waffle - Premium Gourmet Waffles"
                 fetchPriority="high"
-                className="h-10 w-auto object-contain drop-shadow-[0_0_12px_rgba(255,215,0,0.15)] sm:h-12 lg:h-14"
+                className="h-8 w-auto max-w-[120px] object-contain drop-shadow-[0_0_12px_rgba(255,215,0,0.15)] sm:h-12 sm:max-w-none lg:h-14"
               />
             </Link>
 
@@ -89,7 +89,7 @@ export default function Header() {
             </nav>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="hidden items-center gap-2 sm:flex">
             {user ? (
               <div className="relative" ref={dropdownRef}>
                 <button
