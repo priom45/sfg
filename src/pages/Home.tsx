@@ -54,6 +54,12 @@ export default function Home() {
   const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
   const [pendingAddOnItem, setPendingAddOnItem] = useState<{ cartItemId: string; menuItem: MenuItem; quantity: number } | null>(null);
   const [customizationAvailability, setCustomizationAvailability] = useState<CustomizationAvailability | null>(null);
+  const heroCategoryScrollRef = useRef<HTMLDivElement>(null);
+  const browseCategoryScrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollHeroCategoriesLeft, setCanScrollHeroCategoriesLeft] = useState(false);
+  const [canScrollHeroCategoriesRight, setCanScrollHeroCategoriesRight] = useState(false);
+  const [canScrollBrowseCategoriesLeft, setCanScrollBrowseCategoriesLeft] = useState(false);
+  const [canScrollBrowseCategoriesRight, setCanScrollBrowseCategoriesRight] = useState(false);
   const navigate = useNavigate();
   const { addItem, removeItem } = useCart();
   const { showToast } = useToast();
@@ -158,29 +164,23 @@ export default function Home() {
     () => Object.fromEntries(categories.map((category) => [category.id, category.slug])),
     [categories],
   );
-  const averagePrepTime = useMemo(() => {
-    if (allItems.length === 0) return 10;
-    const totalPrepTime = allItems.reduce((sum, item) => sum + (item.prep_time || 0), 0);
-    return Math.max(5, Math.round(totalPrepTime / allItems.length));
-  }, [allItems]);
   const menuItemsById = useMemo(
     () => Object.fromEntries(allItems.map((item) => [item.id, { id: item.id, category_id: item.category_id }])),
     [allItems],
   );
-  const heroStats = useMemo(() => ([
-    { value: `${categories.length || 0}+`, label: 'Categories' },
-    { value: `${allItems.length || 0}+`, label: 'Menu picks' },
-    { value: `${averagePrepTime} min`, label: 'Avg prep' },
-  ]), [allItems.length, averagePrepTime, categories.length]);
-  const heroQuickLinks = useMemo(() => {
+  const heroCategoryLinks = useMemo(() => {
     if (categories.length > 0) {
-      return categories.slice(0, 4).map((category) => ({
-        label: category.name,
-        to: `/menu?category=${category.slug}`,
-      }));
+      return [
+        { label: 'All Menu', to: '/menu' },
+        ...categories.map((category) => ({
+          label: category.name,
+          to: `/menu?category=${category.slug}`,
+        })),
+      ];
     }
 
     return [
+      { label: 'All Menu', to: '/menu' },
       { label: 'Waffles', to: '/menu?search=waffle' },
       { label: 'Shakes', to: '/menu?search=shake' },
       { label: 'Combos', to: '/menu?search=combo' },
@@ -213,6 +213,54 @@ export default function Home() {
     navigate(`/menu?item=${encodeURIComponent(item.id)}`);
   }
 
+  const updateHorizontalScrollState = useCallback((
+    el: HTMLDivElement | null,
+    setLeft: (value: boolean) => void,
+    setRight: (value: boolean) => void,
+  ) => {
+    if (!el) return;
+    setLeft(el.scrollLeft > 4);
+    setRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 4);
+  }, []);
+
+  const scrollHorizontal = useCallback((
+    ref: { current: HTMLDivElement | null },
+    direction: 'left' | 'right',
+  ) => {
+    const el = ref.current;
+    if (!el) return;
+    const amount = Math.max(140, el.clientWidth * 0.72);
+    el.scrollBy({ left: direction === 'left' ? -amount : amount, behavior: 'smooth' });
+  }, []);
+
+  useEffect(() => {
+    const el = heroCategoryScrollRef.current;
+    if (!el) return;
+
+    const sync = () => updateHorizontalScrollState(el, setCanScrollHeroCategoriesLeft, setCanScrollHeroCategoriesRight);
+    sync();
+    el.addEventListener('scroll', sync, { passive: true });
+    window.addEventListener('resize', sync);
+    return () => {
+      el.removeEventListener('scroll', sync);
+      window.removeEventListener('resize', sync);
+    };
+  }, [heroCategoryLinks, updateHorizontalScrollState]);
+
+  useEffect(() => {
+    const el = browseCategoryScrollRef.current;
+    if (!el) return;
+
+    const sync = () => updateHorizontalScrollState(el, setCanScrollBrowseCategoriesLeft, setCanScrollBrowseCategoriesRight);
+    sync();
+    el.addEventListener('scroll', sync, { passive: true });
+    window.addEventListener('resize', sync);
+    return () => {
+      el.removeEventListener('scroll', sync);
+      window.removeEventListener('resize', sync);
+    };
+  }, [categories, updateHorizontalScrollState]);
+
   return (
     <div className="bg-brand-bg min-h-screen pb-20">
       <section className="px-4 pt-4 pb-3">
@@ -234,7 +282,7 @@ export default function Home() {
           >
             <h1 className="sr-only">The Supreme Waffle menu with waffles, shakes, and snacks in Vijayawada</h1>
 
-            <motion.div variants={staggerChild} className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-end">
+            <motion.div variants={staggerChild} className="space-y-3">
               <div className="space-y-3">
                 <form onSubmit={handleHomeSearchSubmit} className="relative">
                   <div className="gloss-shell overflow-visible rounded-[24px] bg-brand-surface/55 p-2 shadow-[0_20px_48px_rgba(8,12,7,0.26)]">
@@ -325,31 +373,34 @@ export default function Home() {
                   </AnimatePresence>
                 </form>
 
-                <div className="flex flex-wrap gap-2">
-                  {heroQuickLinks.map((link) => (
-                    <Link
-                      key={link.to}
-                      to={link.to}
-                      className="gloss-chip max-w-[48%] px-3 py-1.5 text-[11px] text-white transition-colors hover:text-brand-gold sm:max-w-full sm:px-3.5 sm:py-2 sm:text-[12px]"
-                    >
-                      <span className="truncate">{link.label}</span>
-                    </Link>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2">
-                {heroStats.map((stat) => (
-                  <motion.div
-                    key={stat.label}
-                    variants={staggerChild}
-                    className="rounded-[20px] border border-white/10 bg-black/10 px-2.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-xl sm:px-3"
+                <div className="relative">
+                  <div
+                    ref={heroCategoryScrollRef}
+                    className="-mx-1 flex gap-2 overflow-x-auto scrollbar-hide px-1 pb-1 pr-10"
                   >
-                    <div className="gloss-dot mb-3" />
-                    <p className="text-[16px] font-black leading-none text-white sm:text-[24px]">{stat.value}</p>
-                    <p className="mt-1 text-[9px] font-semibold uppercase tracking-[0.1em] text-brand-text-dim sm:text-[11px] sm:tracking-[0.12em]">{stat.label}</p>
-                  </motion.div>
-                ))}
+                    {heroCategoryLinks.map((link) => (
+                      <Link
+                        key={link.to}
+                        to={link.to}
+                        className="gloss-chip shrink-0 whitespace-nowrap px-3 py-1.5 text-[11px] text-white transition-colors hover:text-brand-gold sm:px-3.5 sm:py-2 sm:text-[12px]"
+                      >
+                        {link.label}
+                      </Link>
+                    ))}
+                  </div>
+                  {canScrollHeroCategoriesLeft && (
+                    <ScrollArrowButton
+                      direction="left"
+                      onClick={() => scrollHorizontal(heroCategoryScrollRef, 'left')}
+                    />
+                  )}
+                  {canScrollHeroCategoriesRight && (
+                    <ScrollArrowButton
+                      direction="right"
+                      onClick={() => scrollHorizontal(heroCategoryScrollRef, 'right')}
+                    />
+                  )}
+                </div>
               </div>
             </motion.div>
           </motion.div>
@@ -371,47 +422,64 @@ export default function Home() {
           <section className="px-4 pt-3 pb-1">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
-                <p className="section-label">Pick a lane</p>
-                <h2 className="mt-1 text-[18px] font-bold text-white">What are you craving?</h2>
+                <p className="section-label">Browse More</p>
+                <h2 className="mt-1 text-[18px] font-bold text-white">More categories</h2>
               </div>
             </div>
-            <motion.div
-              className="flex gap-3 overflow-x-auto scrollbar-hide pb-1"
-              variants={staggerContainer}
-              initial="hidden"
-              whileInView="visible"
-              viewport={{ once: true, amount: 0.3 }}
-            >
-              {categories.map((cat) => (
-                <motion.div key={cat.id} variants={staggerChild}>
-                  <Link
-                    to={`/menu?category=${cat.slug}`}
-                    className="group flex w-[88px] flex-shrink-0 flex-col items-center gap-2"
-                  >
-                    <div className="glow-border h-[72px] w-[72px] overflow-hidden rounded-full border border-white/10 bg-white/[0.03] p-1 transition-all group-hover:-translate-y-1 group-hover:border-brand-gold/40">
-                      <img
-                        src={normalizeImageUrl(cat.image_url)}
-                        alt={`${cat.name} waffle category`}
-                        loading="lazy"
-                        decoding="async"
-                        onError={setImageFallback}
-                        className="h-full w-full rounded-full object-cover transition-transform duration-500 group-hover:scale-110"
-                      />
-                    </div>
-                    <span
-                      className="min-h-[2rem] overflow-hidden break-words text-center text-[12px] font-bold leading-tight text-brand-text-muted transition-colors group-hover:text-brand-gold"
-                      style={{
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                      }}
+            <div className="relative">
+              <motion.div
+                ref={browseCategoryScrollRef}
+                className="flex gap-3 overflow-x-auto scrollbar-hide pb-1 pr-10"
+                variants={staggerContainer}
+                initial="hidden"
+                whileInView="visible"
+                viewport={{ once: true, amount: 0.3 }}
+              >
+                {categories.map((cat) => (
+                  <motion.div key={cat.id} variants={staggerChild}>
+                    <Link
+                      to={`/menu?category=${cat.slug}`}
+                      className="group flex w-[88px] flex-shrink-0 flex-col items-center gap-2"
                     >
-                      {cat.name}
-                    </span>
-                  </Link>
-                </motion.div>
-              ))}
-            </motion.div>
+                      <div className="glow-border h-[72px] w-[72px] overflow-hidden rounded-full border border-white/10 bg-white/[0.03] p-1 transition-all group-hover:-translate-y-1 group-hover:border-brand-gold/40">
+                        <img
+                          src={normalizeImageUrl(cat.image_url)}
+                          alt={`${cat.name} waffle category`}
+                          loading="lazy"
+                          decoding="async"
+                          onError={setImageFallback}
+                          className="h-full w-full rounded-full object-cover transition-transform duration-500 group-hover:scale-110"
+                        />
+                      </div>
+                      <span
+                        className="min-h-[2rem] overflow-hidden break-words text-center text-[12px] font-bold leading-tight text-brand-text-muted transition-colors group-hover:text-brand-gold"
+                        style={{
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                        }}
+                      >
+                        {cat.name}
+                      </span>
+                    </Link>
+                  </motion.div>
+                ))}
+              </motion.div>
+              {canScrollBrowseCategoriesLeft && (
+                <ScrollArrowButton
+                  direction="left"
+                  onClick={() => scrollHorizontal(browseCategoryScrollRef, 'left')}
+                  className="top-[38%]"
+                />
+              )}
+              {canScrollBrowseCategoriesRight && (
+                <ScrollArrowButton
+                  direction="right"
+                  onClick={() => scrollHorizontal(browseCategoryScrollRef, 'right')}
+                  className="top-[38%]"
+                />
+              )}
+            </div>
           </section>
         </ScrollReveal>
       )}
@@ -421,7 +489,7 @@ export default function Home() {
           <HorizontalRail
             icon={<Flame size={18} className="text-orange-400" strokeWidth={2.5} />}
             title={popularityContext.title}
-            subtitle={popularityContext.subtitle}
+            subtitle="Most-ordered picks customers usually start with."
             items={bestSellers}
             onImageClick={handleImageClick}
             onAdd={handleAdd}
@@ -486,6 +554,29 @@ export default function Home() {
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+function ScrollArrowButton({
+  direction,
+  onClick,
+  className = '',
+}: {
+  direction: 'left' | 'right';
+  onClick: () => void;
+  className?: string;
+}) {
+  const Icon = direction === 'left' ? ChevronLeft : ChevronRight;
+
+  return (
+    <button
+      type="button"
+      aria-label={direction === 'left' ? 'Scroll left' : 'Scroll right'}
+      onClick={onClick}
+      className={`absolute ${direction === 'left' ? 'left-0' : 'right-0'} top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-brand-surface/88 text-white shadow-elevated backdrop-blur-xl transition-all hover:scale-105 hover:bg-brand-surface-light sm:h-9 sm:w-9 ${className}`}
+    >
+      <Icon size={16} strokeWidth={2.7} />
+    </button>
   );
 }
 
@@ -560,20 +651,18 @@ function HorizontalRail({
           ))}
         </div>
         {canScrollLeft && (
-          <button
+          <ScrollArrowButton
+            direction="left"
             onClick={() => scroll('left')}
-            className="absolute left-2 top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-brand-surface/85 text-white opacity-0 shadow-elevated backdrop-blur-xl transition-all hover:bg-brand-surface-light group-hover/rail:opacity-100 lg:flex"
-          >
-            <ChevronLeft size={18} strokeWidth={2.5} />
-          </button>
+            className="left-2 lg:opacity-0 lg:group-hover/rail:opacity-100"
+          />
         )}
         {canScrollRight && (
-          <button
+          <ScrollArrowButton
+            direction="right"
             onClick={() => scroll('right')}
-            className="absolute right-2 top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-brand-surface/85 text-white opacity-0 shadow-elevated backdrop-blur-xl transition-all hover:bg-brand-surface-light group-hover/rail:opacity-100 lg:flex"
-          >
-            <ChevronRight size={18} strokeWidth={2.5} />
-          </button>
+            className="right-2 lg:opacity-0 lg:group-hover/rail:opacity-100"
+          />
         )}
       </div>
     </section>
