@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ChevronRight, ChevronLeft, Clock, Sparkles, Flame, Search, X } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Flame, Search, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import OfferCarousel from '../components/OfferCarousel';
 import { expireStalePendingOrders } from '../lib/inventorySchema';
@@ -16,15 +16,6 @@ import ScrollReveal from '../components/ScrollReveal';
 import { staggerContainer, staggerChild } from '../lib/animations';
 import { fetchCustomizationAvailability, itemHasAssignedCustomizations, type CustomizationAvailability } from '../lib/customizations';
 import type { Category, MenuItem, Offer } from '../types';
-
-const seoSearchLinks = [
-  { label: 'Belgian waffles in Vijayawada', query: 'Belgian waffle' },
-  { label: 'Eggless waffles', query: 'eggless waffle' },
-  { label: 'Thick shakes', query: 'thick shake' },
-  { label: 'Dessert combos', query: 'combo' },
-  { label: 'Peri peri fries', query: 'fries' },
-  { label: 'Momos and snacks', query: 'momos' },
-];
 
 const seoFaqs = [
   {
@@ -226,30 +217,7 @@ export default function Home() {
             initial="hidden"
             animate="visible"
           >
-            <motion.div variants={staggerChild} className="flex flex-wrap gap-2">
-              {[
-                { icon: Sparkles, text: 'Fresh off the iron' },
-                { icon: Flame, text: 'Golden crispy edges' },
-                { icon: Clock, text: `${averagePrepTime}-minute comfort` },
-              ].map((item) => (
-                <span key={item.text} className="gloss-chip">
-                  <item.icon size={13} className="text-brand-gold" strokeWidth={2.3} />
-                  {item.text}
-                </span>
-              ))}
-            </motion.div>
-
-            <motion.div variants={staggerChild} className="max-w-2xl">
-              <p className="section-label text-brand-gold-soft">Premium waffle studio</p>
-              <h1 className="mt-3 max-w-3xl text-[clamp(2.2rem,6vw,4.8rem)] font-black leading-[0.96] tracking-[-0.05em] text-white">
-                Glossy bites,
-                <br />
-                warm-night comfort.
-              </h1>
-              <p className="mt-4 max-w-xl text-[14px] font-medium leading-relaxed text-brand-text-muted sm:text-[15px]">
-                Handcrafted waffles, shakes, and snacky add-ons with a richer, polished storefront that feels as indulgent as the menu.
-              </p>
-            </motion.div>
+            <h1 className="sr-only">The Supreme Waffle menu with waffles, shakes, and snacks in Vijayawada</h1>
 
             <motion.div variants={staggerChild} className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-end">
               <form onSubmit={handleHomeSearchSubmit} className="relative">
@@ -366,34 +334,6 @@ export default function Home() {
           />
         </section>
       )}
-
-      <ScrollReveal>
-        <section className="px-4 pt-3 pb-2">
-          <div className="gloss-shell rounded-[28px] px-5 py-5 sm:px-6">
-            <div className="max-w-3xl">
-              <p className="section-label">Search-friendly highlights</p>
-              <h2 className="mt-2 text-[24px] font-black leading-tight text-white sm:text-[30px]">
-                Best waffles, thick shakes, dessert combos, and quick bites in Vijayawada.
-              </h2>
-              <p className="mt-3 text-[14px] leading-relaxed text-brand-text-muted sm:text-[15px]">
-                The Supreme Waffle serves Belgian waffles, eggless waffles, thick shakes, milkshakes, fries, momos, burgers, and dessert combos from Police Station Road, Kanuru, Vijayawada. Order online for dine-in or takeaway pickup and jump straight into the menu.
-              </p>
-            </div>
-
-            <div className="mt-5 flex flex-wrap gap-2">
-              {seoSearchLinks.map((link) => (
-                <Link
-                  key={link.label}
-                  to={`/menu?search=${encodeURIComponent(link.query)}`}
-                  className="gloss-chip transition-colors hover:text-brand-gold"
-                >
-                  {link.label}
-                </Link>
-              ))}
-            </div>
-          </div>
-        </section>
-      </ScrollReveal>
 
       {categories.length > 0 && (
         <ScrollReveal>
