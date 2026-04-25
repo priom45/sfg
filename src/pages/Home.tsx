@@ -168,7 +168,7 @@ export default function Home() {
     [allItems],
   );
   const heroStats = useMemo(() => ([
-    { value: `${categories.length || 0}+`, label: 'Menu lanes' },
+    { value: `${categories.length || 0}+`, label: 'Categories' },
     { value: `${allItems.length || 0}+`, label: 'Menu picks' },
     { value: `${averagePrepTime} min`, label: 'Avg prep' },
   ]), [allItems.length, averagePrepTime, categories.length]);
@@ -246,9 +246,9 @@ export default function Home() {
                         onChange={(event) => setHomeSearch(event.target.value)}
                         onFocus={() => setSearchFocused(true)}
                         onBlur={() => window.setTimeout(() => setSearchFocused(false), 120)}
-                        placeholder="Search waffles, shakes..."
+                        placeholder="Waffles, shakes..."
                         aria-label="Search menu items"
-                        className="min-w-0 flex-1 bg-transparent text-[14px] font-semibold text-white outline-none placeholder:text-brand-text-dim sm:text-[15px]"
+                        className="min-w-0 flex-1 bg-transparent text-[13px] font-semibold text-white outline-none placeholder:text-brand-text-dim sm:text-[15px]"
                       />
                       {homeSearch && (
                         <button
@@ -262,9 +262,11 @@ export default function Home() {
                       )}
                       <button
                         type="submit"
-                        className="shrink-0 rounded-[14px] bg-[linear-gradient(135deg,#F0D487_0%,#D8B24E_58%,#B88629_100%)] px-3 py-2.5 text-[11px] font-black tracking-[0.12em] text-brand-bg shadow-[0_14px_30px_rgba(216,178,78,0.18),inset_0_1px_0_rgba(255,255,255,0.3)] transition-transform hover:-translate-y-0.5 sm:px-4 sm:text-[12px]"
+                        aria-label="Search menu"
+                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(135deg,#F0D487_0%,#D8B24E_58%,#B88629_100%)] text-brand-bg shadow-[0_14px_30px_rgba(216,178,78,0.18),inset_0_1px_0_rgba(255,255,255,0.3)] transition-transform hover:-translate-y-0.5 sm:h-auto sm:w-auto sm:px-4 sm:py-2.5"
                       >
-                        Search
+                        <Search size={16} strokeWidth={2.7} className="sm:hidden" />
+                        <span className="hidden text-[12px] font-black tracking-[0.12em] sm:inline">Search</span>
                       </button>
                     </div>
                   </div>
@@ -328,7 +330,7 @@ export default function Home() {
                     <Link
                       key={link.to}
                       to={link.to}
-                      className="gloss-chip max-w-full px-3.5 py-2 text-white transition-colors hover:text-brand-gold"
+                      className="gloss-chip max-w-[48%] px-3 py-1.5 text-[11px] text-white transition-colors hover:text-brand-gold sm:max-w-full sm:px-3.5 sm:py-2 sm:text-[12px]"
                     >
                       <span className="truncate">{link.label}</span>
                     </Link>
@@ -341,11 +343,11 @@ export default function Home() {
                   <motion.div
                     key={stat.label}
                     variants={staggerChild}
-                    className="rounded-[20px] border border-white/10 bg-black/10 px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-xl"
+                    className="rounded-[20px] border border-white/10 bg-black/10 px-2.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-xl sm:px-3"
                   >
                     <div className="gloss-dot mb-3" />
-                    <p className="text-[18px] font-black leading-none text-white sm:text-[24px]">{stat.value}</p>
-                    <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-brand-text-dim sm:text-[11px]">{stat.label}</p>
+                    <p className="text-[16px] font-black leading-none text-white sm:text-[24px]">{stat.value}</p>
+                    <p className="mt-1 text-[9px] font-semibold uppercase tracking-[0.1em] text-brand-text-dim sm:text-[11px] sm:tracking-[0.12em]">{stat.label}</p>
                   </motion.div>
                 ))}
               </div>
