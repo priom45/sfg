@@ -1,29 +1,40 @@
 export type SeoSchemaNode = Record<string, unknown>;
 
-export const seoSiteName = 'The Supreme Waffles';
-export const seoDefaultTitle = 'Best Waffles & Thick Shakes in Vijayawada | The Supreme Waffles';
-export const seoDefaultDescription = 'The Supreme Waffles in Vijayawada serves Belgian waffles, stick waffles, thick shakes, milkshakes, dessert combos, fries, momos, and street food favorites. Order online for the best waffles, shakes, and combo offers in Vijayawada.';
+export const seoSiteName = 'The Supreme Waffle';
+export const seoDefaultTitle = 'Best Waffles, Thick Shakes & Dessert Combos in Vijayawada | The Supreme Waffle';
+export const seoDefaultDescription = 'The Supreme Waffle in Vijayawada serves Belgian waffles, eggless waffles, thick shakes, milkshakes, dessert combos, fries, momos, burgers, and snack favorites from Police Station Road, Kanuru. Order online for dine-in and takeaway pickup.';
 export const seoDefaultImage = '/logo-full.png';
 export const seoDefaultKeywords = [
-  'The Supreme Waffles',
-  'The Supreme Waffles Vijayawada',
-  'Supreme Waffles menu',
-  'Supreme Waffles offers',
-  'Supreme Waffles shakes',
-  'Supreme Waffles combos',
-  'supreme waffles Vijayawada',
+  'The Supreme Waffle',
+  'The Supreme Waffle Vijayawada',
+  'Supreme Waffle menu',
+  'Supreme Waffle offers',
+  'Supreme Waffle shakes',
+  'Supreme Waffle combos',
+  'supreme waffle Vijayawada',
   'best waffles in Vijayawada',
   'waffles in Vijayawada',
+  'Belgian waffles Vijayawada',
+  'eggless waffles Vijayawada',
+  'dessert cafe Vijayawada',
   'dessert shop in Vijayawada',
   'dessert shop Vijayawada near me',
+  'waffle cafe Vijayawada',
+  'waffle cafe near Benz Circle',
+  'waffle shop Kanuru',
+  'dessert cafe Kanuru',
   'waffle shop near me',
   'Belgian waffles near me',
   'thick shakes near me',
   'milkshakes near me',
+  'best thick shakes in Vijayawada',
+  'dessert combos Vijayawada',
+  'snack combos Vijayawada',
   'ice cream waffles near me',
   'best dessert combo offers Vijayawada',
   'street food waffles Vijayawada',
   'waffle menu',
+  'dessert menu Vijayawada',
   'Belgian chocolate waffle',
   'dark fantasy waffle',
   'white chocolate waffle',
@@ -55,6 +66,9 @@ export const seoDefaultKeywords = [
   'crispy fried momos near me',
   'quick bite desserts Vijayawada',
   'best place for waffles in Vijayawada',
+  'takeaway waffles Vijayawada',
+  'dine in waffles Vijayawada',
+  'Police Station Road Kanuru food',
 ];
 
 const fallbackSiteUrl = 'https://thesupreme.waffle';
@@ -118,6 +132,7 @@ export const restaurantSchema = {
   servesCuisine: ['Waffles', 'Belgian Waffles', 'Desserts', 'Milkshakes', 'Thick Shakes', 'Fast Food', 'Street Food'],
   priceRange: '$$',
   menu: buildSeoUrl('/menu'),
+  hasMenu: buildSeoUrl('/menu'),
   address: {
     '@type': 'PostalAddress',
     streetAddress: 'Police Station Road, Kanuru',
@@ -128,6 +143,45 @@ export const restaurantSchema = {
   areaServed: ['Vijayawada', 'Benz Circle', 'Kanuru'],
   sameAs: [
     'https://wa.me/919876543210?text=Hi, I have a question about The Supreme Waffle',
+  ],
+};
+
+export const homeFaqSchema = {
+  '@type': 'FAQPage',
+  '@id': buildSeoUrl('/#faq'),
+  mainEntity: [
+    {
+      '@type': 'Question',
+      name: 'Where is The Supreme Waffle located in Vijayawada?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'The Supreme Waffle is located on Police Station Road, Kanuru, Vijayawada.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'What can I order from The Supreme Waffle?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'The menu includes Belgian waffles, dessert waffles, eggless options, thick shakes, milkshakes, fries, momos, burgers, and combo snacks.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'Can I order online for takeaway or dine-in pickup?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Yes. The website supports online ordering for dine-in and takeaway pickup.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'Do you have eggless waffles and dessert combos?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Yes. The menu includes eggless waffle options along with dessert combos, shakes, and quick-bite add-ons.',
+      },
+    },
   ],
 };
 

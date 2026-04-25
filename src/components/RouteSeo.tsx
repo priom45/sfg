@@ -4,6 +4,7 @@ import {
   buildBreadcrumbSchema,
   buildSchemaGraph,
   buildSeoUrl,
+  homeFaqSchema,
   humanizeSlug,
   menuSchema,
   organizationSchema,
@@ -211,7 +212,7 @@ function getRouteMetadata(pathname: string, search: string): SeoMetadata {
       description: 'Browse live offers, combo deals, waffle discounts, and current promotions from The Supreme Waffle.',
       path: '/offers',
       robots: defaultRobots,
-      keywords: [...seoDefaultKeywords, 'waffle offers', 'dessert deals', 'live food offers Vijayawada'],
+      keywords: [...seoDefaultKeywords, 'waffle offers', 'dessert deals', 'live food offers Vijayawada', 'waffle deals Vijayawada', 'discount dessert combos Vijayawada'],
       schema: buildSchemaGraph([
         {
           '@type': 'CollectionPage',
@@ -240,7 +241,7 @@ function getRouteMetadata(pathname: string, search: string): SeoMetadata {
       description: 'Learn about The Supreme Waffle, our handcrafted dessert philosophy, kitchen standards, and customer support channels.',
       path: '/about',
       robots: defaultRobots,
-      keywords: [...seoDefaultKeywords, 'about The Supreme Waffle', 'waffle cafe story'],
+      keywords: [...seoDefaultKeywords, 'about The Supreme Waffle', 'waffle cafe story', 'waffle cafe Vijayawada', 'dessert cafe Kanuru'],
       schema: buildSchemaGraph([
         {
           '@type': 'AboutPage',
@@ -319,7 +320,7 @@ function getRouteMetadata(pathname: string, search: string): SeoMetadata {
     description: seoDefaultDescription,
     path: '/',
     robots: defaultRobots,
-    keywords: [...seoDefaultKeywords, 'premium waffles', 'handcrafted desserts'],
+    keywords: [...seoDefaultKeywords, 'premium waffles', 'handcrafted desserts', 'best waffles near Benz Circle', 'thick shakes Vijayawada', 'dessert combos Vijayawada'],
     schema: buildSchemaGraph([
       {
         '@type': 'WebPage',
@@ -334,6 +335,7 @@ function getRouteMetadata(pathname: string, search: string): SeoMetadata {
       websiteSchema,
       organizationSchema,
       restaurantSchema,
+      homeFaqSchema,
     ]),
   };
 }

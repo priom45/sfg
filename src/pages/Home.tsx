@@ -17,6 +17,30 @@ import { staggerContainer, staggerChild } from '../lib/animations';
 import { fetchCustomizationAvailability, itemHasAssignedCustomizations, type CustomizationAvailability } from '../lib/customizations';
 import type { Category, MenuItem, Offer } from '../types';
 
+const seoSearchLinks = [
+  { label: 'Belgian waffles in Vijayawada', query: 'Belgian waffle' },
+  { label: 'Eggless waffles', query: 'eggless waffle' },
+  { label: 'Thick shakes', query: 'thick shake' },
+  { label: 'Dessert combos', query: 'combo' },
+  { label: 'Peri peri fries', query: 'fries' },
+  { label: 'Momos and snacks', query: 'momos' },
+];
+
+const seoFaqs = [
+  {
+    question: 'Where is The Supreme Waffle in Vijayawada?',
+    answer: 'You can find The Supreme Waffle on Police Station Road, Kanuru, Vijayawada.',
+  },
+  {
+    question: 'What can I order besides waffles?',
+    answer: 'The menu also includes thick shakes, milkshakes, fries, momos, burgers, and dessert combos.',
+  },
+  {
+    question: 'Can I order online for takeaway or dine-in pickup?',
+    answer: 'Yes. The website supports online ordering for dine-in and takeaway pickup.',
+  },
+];
+
 export default function Home() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [bestSellers, setBestSellers] = useState<MenuItem[]>([]);
@@ -343,6 +367,34 @@ export default function Home() {
         </section>
       )}
 
+      <ScrollReveal>
+        <section className="px-4 pt-3 pb-2">
+          <div className="gloss-shell rounded-[28px] px-5 py-5 sm:px-6">
+            <div className="max-w-3xl">
+              <p className="section-label">Search-friendly highlights</p>
+              <h2 className="mt-2 text-[24px] font-black leading-tight text-white sm:text-[30px]">
+                Best waffles, thick shakes, dessert combos, and quick bites in Vijayawada.
+              </h2>
+              <p className="mt-3 text-[14px] leading-relaxed text-brand-text-muted sm:text-[15px]">
+                The Supreme Waffle serves Belgian waffles, eggless waffles, thick shakes, milkshakes, fries, momos, burgers, and dessert combos from Police Station Road, Kanuru, Vijayawada. Order online for dine-in or takeaway pickup and jump straight into the menu.
+              </p>
+            </div>
+
+            <div className="mt-5 flex flex-wrap gap-2">
+              {seoSearchLinks.map((link) => (
+                <Link
+                  key={link.label}
+                  to={`/menu?search=${encodeURIComponent(link.query)}`}
+                  className="gloss-chip transition-colors hover:text-brand-gold"
+                >
+                  {link.label}
+                </Link>
+              ))}
+            </div>
+          </div>
+        </section>
+      </ScrollReveal>
+
       {categories.length > 0 && (
         <ScrollReveal>
           <section className="px-4 pt-3 pb-1">
@@ -418,6 +470,26 @@ export default function Home() {
           />
         </ScrollReveal>
       ))}
+
+      <ScrollReveal>
+        <section className="px-4 pt-5 pb-2">
+          <div className="gloss-shell rounded-[28px] px-5 py-5 sm:px-6">
+            <p className="section-label">Common Questions</p>
+            <h2 className="mt-2 text-[22px] font-black text-white">Local waffle search answers</h2>
+            <div className="mt-5 grid gap-3 md:grid-cols-3">
+              {seoFaqs.map((item) => (
+                <article
+                  key={item.question}
+                  className="rounded-[22px] border border-white/10 bg-black/10 px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+                >
+                  <h3 className="text-[15px] font-bold text-white">{item.question}</h3>
+                  <p className="mt-2 text-[13px] leading-relaxed text-brand-text-muted">{item.answer}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+      </ScrollReveal>
 
       <AnimatePresence>
         {selectedItem && (
