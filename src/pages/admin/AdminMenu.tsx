@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, Pencil, Trash2, Save, X } from 'lucide-react';
+import { Plus, Pencil, Trash2, Save, X, Search } from 'lucide-react';
 import { useToast } from '../../components/Toast';
 import CustomizationAssignmentsManager from '../../components/admin/CustomizationAssignmentsManager';
 import { detectInventorySchemaSupport } from '../../lib/inventorySchema';
@@ -216,6 +216,8 @@ export default function AdminMenu() {
   const [showCatForm, setShowCatForm] = useState(false);
   const [stockDrafts, setStockDrafts] = useState<Record<string, string>>({});
   const [updatingStockId, setUpdatingStockId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('');
   const categoryFormRef = useRef<HTMLDivElement | null>(null);
   const itemFormRef = useRef<HTMLDivElement | null>(null);
   const schemaNoticeShownRef = useRef(false);
@@ -306,6 +308,13 @@ export default function AdminMenu() {
   const outOfStockItems = trackedItems.filter((item) => getAvailableQuantity(item) <= 0);
   const totalTrackedQuantity = trackedItems.reduce((sum, item) => sum + getAvailableQuantity(item), 0);
   const editingVisibilityResult = editing ? getEditingVisibilityResult(editing) : null;
+
+  const filteredItems = sortedItems.filter((item) => {
+    const q = searchQuery.trim().toLowerCase();
+    const matchesSearch = !q || item.name.toLowerCase().includes(q);
+    const matchesCategory = !selectedCategoryFilter || item.category_id === selectedCategoryFilter;
+    return matchesSearch && matchesCategory;
+  });
 
   const categoryItemCountById = Object.fromEntries(
     categories.map((category) => [
@@ -975,86 +984,160 @@ export default function AdminMenu() {
           </div>
         )}
 
+        {/* Search + category filter */}
+        <div className="mb-3 space-y-2">
+          <div className="relative">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-text-dim pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search items…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="input-field pl-9 pr-9"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-text-dim hover:text-white transition-colors"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          {categories.length > 0 && (
+            <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <button
+                onClick={() => setSelectedCategoryFilter('')}
+                className={`shrink-0 rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
+                  !selectedCategoryFilter
+                    ? 'border-brand-gold bg-brand-gold/10 text-brand-gold'
+                    : 'border-brand-border text-brand-text-muted hover:border-brand-gold/40 hover:text-white'
+                }`}
+              >
+                All
+              </button>
+              {categories.map((cat) => (
+                <button
+                  key={cat.id}
+                  onClick={() => setSelectedCategoryFilter(selectedCategoryFilter === cat.id ? '' : cat.id)}
+                  className={`shrink-0 rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
+                    selectedCategoryFilter === cat.id
+                      ? 'border-brand-gold bg-brand-gold/10 text-brand-gold'
+                      : 'border-brand-border text-brand-text-muted hover:border-brand-gold/40 hover:text-white'
+                  }`}
+                >
+                  {cat.name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {(searchQuery || selectedCategoryFilter) && (
+            <p className="text-xs text-brand-text-dim">
+              {filteredItems.length} of {sortedItems.length} item{sortedItems.length === 1 ? '' : 's'}
+            </p>
+          )}
+        </div>
+
         {sortedItems.length === 0 ? (
           <div className="bg-brand-surface rounded-xl border border-brand-border p-10 text-center text-brand-text-muted">
             No menu items to show
           </div>
+        ) : filteredItems.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-brand-border bg-brand-bg/30 px-4 py-8 text-center">
+            <p className="text-sm font-semibold text-white">No items match your search</p>
+            <button
+              onClick={() => { setSearchQuery(''); setSelectedCategoryFilter(''); }}
+              className="mt-2 text-xs text-brand-gold hover:underline"
+            >
+              Clear filters
+            </button>
+          </div>
         ) : (
           <div className="space-y-2">
-            {sortedItems.map((item) => {
+            {filteredItems.map((item) => {
               const manualAvailability = getManualAvailability(item);
               const trackInventory = getTrackInventory(item);
               const availableQuantity = getAvailableQuantity(item);
+              const categoryName = categories.find((c) => c.id === item.category_id)?.name;
 
               return (
-                <div key={item.id} className="bg-brand-surface rounded-xl border border-brand-border p-3 flex items-center gap-4">
-                  <img
-                    src={item.image_url || '/image.png'}
-                    alt={item.name}
-                    onError={(event) => {
-                      if (event.currentTarget.src.endsWith('/image.png')) return;
-                      event.currentTarget.src = '/image.png';
-                    }}
-                    className="w-14 h-14 rounded-lg object-cover flex-shrink-0"
-                  />
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="font-bold text-sm truncate text-white">{item.name}</h3>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
-                          item.is_available
-                            ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
-                            : 'bg-red-500/10 text-red-300 border border-red-500/20'
-                        }`}
-                      >
-                        {item.is_available ? 'In Stock' : 'Out of Stock'}
-                      </span>
-                      {trackInventory && (
+                <div key={item.id} className="bg-brand-surface rounded-xl border border-brand-border p-3 space-y-2">
+                  {/* Row 1: image + name + badges */}
+                  <div className="flex items-center gap-3">
+                    <img
+                      src={item.image_url || '/image.png'}
+                      alt={item.name}
+                      onError={(event) => {
+                        if (event.currentTarget.src.endsWith('/image.png')) return;
+                        event.currentTarget.src = '/image.png';
+                      }}
+                      className="w-11 h-11 rounded-lg object-cover flex-shrink-0"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <h3 className="font-bold text-sm text-white">{item.name}</h3>
                         <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
-                            availableQuantity > 5
-                              ? 'bg-sky-500/10 text-sky-300 border border-sky-500/20'
-                              : availableQuantity > 0
-                                ? 'bg-amber-500/10 text-amber-300 border border-amber-500/20'
-                                : 'bg-red-500/10 text-red-300 border border-red-500/20'
+                          className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                            item.is_available
+                              ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
+                              : 'border-red-500/20 bg-red-500/10 text-red-300'
                           }`}
                         >
-                          {formatInventorySummary(item)}
+                          {item.is_available ? 'Visible' : 'Hidden'}
                         </span>
-                      )}
+                        {trackInventory && (
+                          <span
+                            className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                              availableQuantity > 5
+                                ? 'border-sky-500/20 bg-sky-500/10 text-sky-300'
+                                : availableQuantity > 0
+                                  ? 'border-amber-500/20 bg-amber-500/10 text-amber-300'
+                                  : 'border-red-500/20 bg-red-500/10 text-red-300'
+                            }`}
+                          >
+                            {formatInventorySummary(item)}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-0.5 text-xs text-brand-text-dim">
+                        {formatVisibilityReason(item)}
+                      </p>
                     </div>
-
-                    <p className="text-xs text-brand-text-muted">
-                      ₹{item.price} &bull; {item.prep_time} min
-                    </p>
-                    <p className="text-xs text-brand-text-dim mt-1">
-                      {formatVisibilityReason(item)}
-                      {trackInventory ? ` • Stock tracked` : ' • Unlimited / manually controlled'}
-                      {!manualAvailability && trackInventory ? ` • ${availableQuantity} kept in admin stock` : ''}
-                    </p>
                   </div>
 
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => void toggleItemAvailability(item, !manualAvailability)}
-                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${
-                        manualAvailability
-                          ? 'text-red-300 hover:bg-red-500/10'
-                          : 'text-emerald-300 hover:bg-emerald-500/10'
-                      }`}
-                    >
-                      {manualAvailability ? 'Hide' : 'Show'}
-                    </button>
-                    <button
-                      onClick={() => setEditing(toItemForm(item))}
-                      className="p-2 hover:bg-brand-surface-light/70 rounded-lg text-brand-text-dim hover:text-white transition-colors"
-                    >
-                      <Pencil size={14} />
-                    </button>
-                    <button onClick={() => deleteItem(item.id)} className="p-2 hover:bg-red-500/10 rounded-lg text-brand-text-dim hover:text-red-400 transition-colors">
-                      <Trash2 size={14} />
-                    </button>
+                  {/* Row 2: price/meta + actions */}
+                  <div className="flex items-center justify-between gap-2 pl-14">
+                    <p className="text-xs text-brand-text-muted">
+                      ₹{item.price}
+                      {item.prep_time ? ` · ${item.prep_time} min` : ''}
+                      {categoryName ? ` · ${categoryName}` : ''}
+                    </p>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => void toggleItemAvailability(item, !manualAvailability)}
+                        className={`rounded-lg px-2.5 py-1.5 text-[11px] font-bold transition-colors ${
+                          manualAvailability
+                            ? 'text-red-300 hover:bg-red-500/10'
+                            : 'text-emerald-300 hover:bg-emerald-500/10'
+                        }`}
+                      >
+                        {manualAvailability ? 'Hide' : 'Show'}
+                      </button>
+                      <button
+                        onClick={() => setEditing(toItemForm(item))}
+                        className="rounded-lg p-2 text-brand-text-dim transition-colors hover:bg-brand-surface-light/70 hover:text-white"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        onClick={() => deleteItem(item.id)}
+                        className="rounded-lg p-2 text-brand-text-dim transition-colors hover:bg-red-500/10 hover:text-red-400"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               );

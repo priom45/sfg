@@ -155,7 +155,7 @@ async function getFunctionAuthToken(options?: { forceRefresh?: boolean; errorMes
     return { accessToken: supabaseAnonKey, isGuest: true };
   } else {
     const expiresAtMs = sessionData.session.expires_at ? sessionData.session.expires_at * 1000 : 0;
-    if (expiresAtMs && expiresAtMs - Date.now() < 60_000) {
+    if (!expiresAtMs || expiresAtMs - Date.now() < 60_000) {
       const session = await refreshCustomerSession(errorMessage);
       return { accessToken: session.access_token, isGuest: false };
     }
@@ -279,6 +279,13 @@ export async function createRazorpayOrder(payload: CreateRazorpayOrderPayload) {
   }
 
   if (error instanceof FunctionsHttpError && error.context instanceof Response && error.context.status === 401 && authToken.isGuest) {
+    try {
+      const payload = await error.context.clone().json() as { error?: string; message?: string };
+      const msg = (typeof payload.error === 'string' && payload.error.trim()) || (typeof payload.message === 'string' && payload.message.trim());
+      if (msg) throw new Error(msg);
+    } catch (parseErr) {
+      if (parseErr instanceof Error && parseErr !== error) throw parseErr;
+    }
     throw new Error('Guest online payment needs the store backend update before an Order ID can be created.');
   }
 

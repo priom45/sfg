@@ -25,7 +25,7 @@ export default function AuthPage() {
   const from = (location.state as { from?: string })?.from || '/';
 
   useEffect(() => {
-    if (profile && profile.full_name) {
+    if (profile && profile.full_name && profile.phone) {
       if (profile.role === 'chef') {
         navigate('/chef', { replace: true });
       } else if (profile.role === 'admin') {
@@ -36,11 +36,7 @@ export default function AuthPage() {
       return;
     }
 
-    if (profile && !profile.full_name) {
-      setStep('profile');
-      setProfileEmail(profile.email || user?.email || emailInput);
-      setProfilePhone(profile.phone || '');
-    } else if (profile && !profile.phone) {
+    if (profile && (!profile.full_name || !profile.phone)) {
       setStep('profile');
       setProfileEmail(profile.email || user?.email || emailInput);
       setProfilePhone(profile.phone || '');
@@ -91,6 +87,8 @@ export default function AuthPage() {
         navigate('/chef', { replace: true });
         return;
       }
+
+      return;
     }
 
     setLoading(true);

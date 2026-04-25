@@ -146,7 +146,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(data.user);
       const profileData = await fetchProfile(customerSupabase, data.user.id);
       const role = profileData?.role || null;
-      const isNewUser = !profileData || ((!profileData.full_name || !profileData.phone) && role === 'customer');
+      const isNewUser = !profileData || !profileData.full_name || !profileData.phone;
       return { error: null, isNewUser, role };
     }
 
