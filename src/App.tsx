@@ -28,6 +28,7 @@ import AdminOrders from './pages/admin/AdminOrders';
 import AdminMenu from './pages/admin/AdminMenu';
 import AdminZones from './pages/admin/AdminZones';
 import AdminOffers from './pages/admin/AdminOffers';
+import AdminOffersBulk from './pages/admin/AdminOffersBulk';
 import AdminMessages from './pages/admin/AdminMessages';
 import AdminWebsite from './pages/admin/AdminWebsite';
 import ChefLogin from './pages/chef/ChefLogin';
@@ -123,6 +124,7 @@ export default function App() {
                   <Route path="orders" element={<AdminOrders />} />
                   <Route path="menu" element={<AdminMenu />} />
                   <Route path="zones" element={<AdminZones />} />
+                  <Route path="offers/bulk" element={<AdminOffersBulk />} />
                   <Route path="offers" element={<AdminOffers />} />
                   <Route path="messages" element={<AdminMessages />} />
                   <Route path="website" element={<AdminWebsite />} />

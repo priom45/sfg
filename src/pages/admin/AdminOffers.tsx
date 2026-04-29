@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ImagePlus, Pencil, Plus, Save, Trash2, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useToast } from '../../components/Toast';
 import {
   getOfferBadgeLabel,
@@ -957,9 +958,20 @@ export default function AdminOffers() {
             The homepage carousel shows the newest 4 active offers from this list.
           </p>
         </div>
-        <button onClick={() => setEditing(buildEmptyOffer())} className="flex items-center gap-1 text-sm text-brand-gold font-semibold">
-          <Plus size={16} /> Add Offer
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <Link to="/admin/offers/bulk" className="btn-outline px-4 py-2 text-sm">
+            <span className="inline-flex items-center gap-1">
+              <Plus size={14} />
+              Bulk Add
+            </span>
+          </Link>
+          <button onClick={() => setEditing(buildEmptyOffer())} className="btn-primary px-4 py-2 text-sm">
+            <span className="inline-flex items-center gap-1">
+              <Plus size={14} />
+              Add Offer
+            </span>
+          </button>
+        </div>
       </div>
 
       <div className="mb-6 rounded-xl border border-brand-border bg-brand-surface p-4">
