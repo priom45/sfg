@@ -52,10 +52,7 @@ export default function Home() {
   const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
   const [pendingAddOnItem, setPendingAddOnItem] = useState<{ cartItemId: string; menuItem: MenuItem; quantity: number } | null>(null);
   const [customizationAvailability, setCustomizationAvailability] = useState<CustomizationAvailability | null>(null);
-  const heroCategoryScrollRef = useRef<HTMLDivElement>(null);
   const browseCategoryScrollRef = useRef<HTMLDivElement>(null);
-  const [canScrollHeroCategoriesLeft, setCanScrollHeroCategoriesLeft] = useState(false);
-  const [canScrollHeroCategoriesRight, setCanScrollHeroCategoriesRight] = useState(false);
   const [canScrollBrowseCategoriesLeft, setCanScrollBrowseCategoriesLeft] = useState(false);
   const [canScrollBrowseCategoriesRight, setCanScrollBrowseCategoriesRight] = useState(false);
   const { addItem, removeItem } = useCart();
@@ -165,25 +162,6 @@ export default function Home() {
     () => Object.fromEntries(allItems.map((item) => [item.id, { id: item.id, category_id: item.category_id }])),
     [allItems],
   );
-  const heroCategoryLinks = useMemo(() => {
-    if (categories.length > 0) {
-      return [
-        { label: 'All Menu', to: '/menu' },
-        ...categories.map((category) => ({
-          label: category.name,
-          to: `/menu?category=${category.slug}`,
-        })),
-      ];
-    }
-
-    return [
-      { label: 'All Menu', to: '/menu' },
-      { label: 'Waffles', to: '/menu?search=waffle' },
-      { label: 'Shakes', to: '/menu?search=shake' },
-      { label: 'Combos', to: '/menu?search=combo' },
-      { label: 'Snacks', to: '/menu?search=fries' },
-    ];
-  }, [categories]);
 
   const updateHorizontalScrollState = useCallback((
     el: HTMLDivElement | null,
@@ -206,20 +184,6 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const el = heroCategoryScrollRef.current;
-    if (!el) return;
-
-    const sync = () => updateHorizontalScrollState(el, setCanScrollHeroCategoriesLeft, setCanScrollHeroCategoriesRight);
-    sync();
-    el.addEventListener('scroll', sync, { passive: true });
-    window.addEventListener('resize', sync);
-    return () => {
-      el.removeEventListener('scroll', sync);
-      window.removeEventListener('resize', sync);
-    };
-  }, [heroCategoryLinks, updateHorizontalScrollState]);
-
-  useEffect(() => {
     const el = browseCategoryScrollRef.current;
     if (!el) return;
 
@@ -235,63 +199,8 @@ export default function Home() {
 
   return (
     <div className="bg-brand-bg min-h-screen pb-20">
-      <section className="px-4 pt-4 pb-3">
-        <motion.div
-          className="gloss-shell hero-grid overflow-hidden rounded-[30px] px-4 py-4 sm:px-7 sm:py-7"
-          initial={{ opacity: 0, y: 24, scale: 0.985 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
-        >
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,247,214,0.18),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(113,154,84,0.2),transparent_34%)]" />
-          <div className="pointer-events-none absolute -right-10 top-6 h-32 w-32 rounded-full bg-brand-gold/20 blur-3xl animate-pulse-soft" />
-          <div className="pointer-events-none absolute -left-10 bottom-0 h-28 w-28 rounded-full bg-emerald-300/10 blur-3xl animate-float" />
-
-          <motion.div
-            className="space-y-4"
-            variants={staggerContainer}
-            initial="hidden"
-            animate="visible"
-          >
-            <h1 className="sr-only">The Supreme Waffle menu with waffles, shakes, and snacks in Vijayawada</h1>
-
-            <motion.div variants={staggerChild} className="space-y-3">
-              <div className="space-y-3">
-                <div className="relative">
-                  <div
-                    ref={heroCategoryScrollRef}
-                    className="-mx-1 flex gap-2 overflow-x-auto scrollbar-hide px-1 pb-1 pr-10"
-                  >
-                    {heroCategoryLinks.map((link) => (
-                      <Link
-                        key={link.to}
-                        to={link.to}
-                        className="gloss-chip shrink-0 whitespace-nowrap px-3 py-1.5 text-[11px] text-white transition-colors hover:text-brand-gold sm:px-3.5 sm:py-2 sm:text-[12px]"
-                      >
-                        {link.label}
-                      </Link>
-                    ))}
-                  </div>
-                  {canScrollHeroCategoriesLeft && (
-                    <ScrollArrowButton
-                      direction="left"
-                      onClick={() => scrollHorizontal(heroCategoryScrollRef, 'left')}
-                    />
-                  )}
-                  {canScrollHeroCategoriesRight && (
-                    <ScrollArrowButton
-                      direction="right"
-                      onClick={() => scrollHorizontal(heroCategoryScrollRef, 'right')}
-                    />
-                  )}
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        </motion.div>
-      </section>
-
       {offers.length > 0 && (
-        <section className="px-4 pt-1 pb-2">
+        <section className="px-4 pt-4 pb-2">
           <OfferCarousel
             offers={offers}
             categorySlugById={categorySlugById}
