@@ -72,7 +72,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ showToast }}>
       {children}
-      <div className="pointer-events-none fixed left-1/2 top-3 z-[70] flex w-[calc(100%-1rem)] max-w-md -translate-x-1/2 flex-col gap-2 sm:top-5 sm:w-full">
+      <div className="pointer-events-none fixed left-1/2 top-3 z-[130] flex w-[calc(100%-1rem)] max-w-md -translate-x-1/2 flex-col gap-2 sm:top-5 sm:w-full">
         <AnimatePresence>
           {toasts.map((toast) => (
             <motion.div
@@ -82,21 +82,34 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -12, scale: 0.96, transition: { duration: 0.18 } }}
               transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-              className={`pointer-events-auto flex items-center gap-3 rounded-2xl border px-4 py-3 text-[14px] font-semibold shadow-[0_18px_42px_rgba(0,0,0,0.28)] backdrop-blur-xl ${
+              className={`pointer-events-auto relative overflow-hidden flex items-start gap-3 rounded-[22px] border px-4 py-3.5 text-[14px] font-semibold shadow-[0_24px_64px_rgba(0,0,0,0.42)] backdrop-blur-2xl ${
                 toast.type === 'success'
-                  ? 'border-emerald-400/30 bg-emerald-500/92 text-white'
-                  : 'border-red-400/30 bg-red-500/92 text-white'
+                  ? 'border-emerald-400/30 bg-brand-surface/96 text-white ring-1 ring-emerald-400/10'
+                  : 'border-rose-400/30 bg-brand-surface/96 text-white ring-1 ring-rose-400/10'
               }`}
               role="status"
               aria-live="polite"
             >
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/14">
+              <div
+                className={`pointer-events-none absolute inset-x-0 top-0 h-px ${
+                  toast.type === 'success'
+                    ? 'bg-gradient-to-r from-transparent via-emerald-300/80 to-transparent'
+                    : 'bg-gradient-to-r from-transparent via-rose-300/80 to-transparent'
+                }`}
+              />
+              <span
+                className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
+                  toast.type === 'success'
+                    ? 'border-emerald-400/25 bg-emerald-500/14 text-emerald-200'
+                    : 'border-rose-400/25 bg-rose-500/14 text-rose-200'
+                }`}
+              >
                 {toast.type === 'success' ? <Check size={16} strokeWidth={2.2} /> : <AlertCircle size={16} strokeWidth={2.2} />}
               </span>
-              <span className="min-w-0 flex-1 truncate pr-1">{toast.message}</span>
+              <span className="min-w-0 flex-1 pr-1 leading-snug">{toast.message}</span>
               <button
                 onClick={() => removeToast(toast.id)}
-                className="shrink-0 rounded-full p-1 text-white/90 transition-colors hover:bg-white/10 hover:text-white"
+                className="shrink-0 rounded-full border border-white/8 bg-white/[0.03] p-1.5 text-white/75 transition-colors hover:bg-white/10 hover:text-white"
                 aria-label="Dismiss notification"
               >
                 <X size={14} strokeWidth={2.2} />

@@ -300,14 +300,19 @@ export default function TrackOrderPage() {
   const isExpired = order?.status === 'expired';
   const isOnlinePaymentPending = order ? isAwaitingOnlinePayment(order) : false;
   const isCounterPaymentPending = order ? isAwaitingCounterPayment(order) : false;
-  const isInQueue = order?.status === 'pending' && !isCounterPaymentPending && !isOnlinePaymentPending;
+  const isCounterPaymentPendingBeforeConfirmation = isCounterPaymentPending && order?.status === 'pending';
+  const isCounterPaymentPaidAndQueued = !!order && order.order_type === 'pickup' && order.payment_status === 'paid' && order.status === 'pending';
+  const isInQueue = order?.status === 'pending' && !isCounterPaymentPendingBeforeConfirmation && !isOnlinePaymentPending;
   const isPreparing = order?.status === 'preparing';
-  const isActive = order && !['cancelled', 'expired', 'delivered'].includes(order.status) && !isReadyForPickup && !isCounterPaymentPending && !isOnlinePaymentPending;
+  const isActive = order && !['cancelled', 'expired', 'delivered'].includes(order.status) && !isReadyForPickup && !isCounterPaymentPendingBeforeConfirmation && !isOnlinePaymentPending;
   const showCountdown = isActive && order.estimated_minutes && (order.accepted_at || order.confirmed_at) && ['confirmed', 'preparing'].includes(order.status);
   const serviceModeLabel = order ? getServiceModeLabel(order) : '';
   const readyOrderLabel = order ? getReadyOrderLabel(order) : '';
   const completedOrderLabel = order ? getCompletedOrderLabel(order) : '';
   const isDineIn = order ? isDineInOrder(order) : false;
+  const timelineStatus = order
+    ? (isCounterPaymentPaidAndQueued ? 'confirmed' : order.status)
+    : 'pending';
 
   return (
     <div className="min-h-screen bg-brand-bg">
@@ -398,7 +403,7 @@ export default function TrackOrderPage() {
               </div>
             )}
 
-            {isCounterPaymentPending && (
+            {isCounterPaymentPendingBeforeConfirmation && (
               <div className="relative overflow-hidden rounded-2xl bg-amber-500 p-6 text-center text-white shadow-elevated animate-scale-in backdrop-blur">
                 <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_50%,rgba(255,255,255,0.12),transparent)]" />
                 <div className="relative">
@@ -454,9 +459,11 @@ export default function TrackOrderPage() {
                   <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-brand-surface-strong/80 backdrop-blur-sm">
                     <Users size={32} />
                   </div>
-                  <h2 className="mb-2 text-2xl font-black">Your Order is in Queue</h2>
+                  <h2 className="mb-2 text-2xl font-black">{isCounterPaymentPaidAndQueued ? 'Order Confirmed' : 'Your Order is in Queue'}</h2>
                   <p className="text-[14px] text-orange-100 mb-3">
-                    Please wait while our chef accepts your order
+                    {isCounterPaymentPaidAndQueued
+                      ? 'Payment confirmed. Your order is now waiting in the kitchen queue.'
+                      : 'Please wait while our chef accepts your order'}
                   </p>
                   {queueAhead > 0 && (
                     <div className="inline-flex items-center gap-2 rounded-full bg-brand-surface-strong/80 px-4 py-2 text-[14px] font-semibold backdrop-blur-sm">
@@ -561,7 +568,7 @@ export default function TrackOrderPage() {
                     className={`inline-block rounded-full px-3 py-1 text-[12px] font-semibold capitalize ${
                       isOnlinePaymentPending
                         ? 'bg-sky-500/10 text-sky-400'
-                        : isCounterPaymentPending
+                        : isCounterPaymentPendingBeforeConfirmation
                         ? 'bg-amber-500/10 text-amber-400'
                         : order.status === 'delivered'
                         ? 'bg-emerald-500/10 text-emerald-400'
@@ -574,8 +581,10 @@ export default function TrackOrderPage() {
                   >
                     {isOnlinePaymentPending
                       ? 'payment processing'
-                      : isCounterPaymentPending
+                      : isCounterPaymentPendingBeforeConfirmation
                       ? 'payment pending'
+                      : isCounterPaymentPaidAndQueued
+                      ? 'confirmed'
                       : isReadyForPickup
                       ? readyOrderLabel
                       : order.status === 'delivered'
@@ -587,7 +596,7 @@ export default function TrackOrderPage() {
               </div>
 
               <OrderTimeline
-                currentStatus={order.status}
+                currentStatus={timelineStatus}
                 orderType={order.order_type}
                 pickupOption={order.pickup_option}
                 paymentMethod={order.payment_method}

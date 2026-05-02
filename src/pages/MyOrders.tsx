@@ -255,10 +255,14 @@ function ActiveOrderCard({ order }: { order: Order }) {
   const isReady = order.status === 'packed' && order.order_type === 'pickup';
   const isOnlinePaymentPending = isAwaitingOnlinePayment(order);
   const isCounterPaymentPending = isAwaitingCounterPayment(order);
+  const isCounterPaymentPendingBeforeConfirmation = isCounterPaymentPending && order.status === 'pending';
+  const isCounterPaymentPaidAndQueued = order.order_type === 'pickup' && order.payment_status === 'paid' && order.status === 'pending';
   const config = isOnlinePaymentPending
     ? { color: 'text-sky-400', bg: 'bg-sky-500/10', icon: Clock, label: 'Payment Processing' }
-    : isCounterPaymentPending
+    : isCounterPaymentPendingBeforeConfirmation
       ? { color: 'text-amber-400', bg: 'bg-amber-500/10', icon: Wallet, label: 'Payment Pending' }
+      : isCounterPaymentPaidAndQueued
+        ? statusConfig.confirmed
       : order.status === 'packed' && order.order_type === 'delivery'
         ? { color: 'text-sky-400', bg: 'bg-sky-500/10', icon: Package, label: 'Packed' }
         : statusConfig[order.status] || statusConfig.pending;
@@ -296,6 +300,11 @@ function ActiveOrderCard({ order }: { order: Order }) {
             {isOnlinePaymentPending && (
               <p className="text-[11px] text-sky-400 mt-1">
                 We are verifying your online payment
+              </p>
+            )}
+            {isCounterPaymentPending && order.status !== 'pending' && (
+              <p className="text-[11px] text-amber-400 mt-1">
+                Order confirmed. Payment will be collected at the counter.
               </p>
             )}
           </div>

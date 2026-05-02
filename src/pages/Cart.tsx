@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Minus, Plus, Trash2, ShoppingBag, ArrowLeft, Tag, User, Pencil, Store, Wallet, CreditCard, Gift, Mail } from 'lucide-react';
+import { Minus, Plus, Trash2, ShoppingBag, ArrowLeft, Tag, User, Pencil, Store, Wallet, CreditCard, Gift, Mail, Phone } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useCart } from '../contexts/CartContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -28,14 +28,16 @@ import { fetchCustomizationAvailability, itemHasAssignedCustomizations, type Cus
 import { createCounterOrder } from '../lib/counterOrder';
 import { suggestCartAddOns } from '../lib/cartSuggestions';
 import { calculateReviewRewardDiscount } from '../lib/itemReviews';
-import type { MenuItem, Order, PaymentMethod, Offer, PickupOption, ReviewRewardCoupon, SelectedCustomization } from '../types';
+import type { DeliveryZone, MenuItem, Order, OrderType, PaymentMethod, Offer, PickupOption, ReviewRewardCoupon, SelectedCustomization } from '../types';
 import { useToast } from '../components/Toast';
 import { RAZORPAY_BRAND_IMAGE, buildRazorpayCallbackUrl, cancelRazorpayPayment, createRazorpayOrder, loadRazorpayScript, verifyRazorpayPayment } from '../lib/razorpay';
 import { playOrderSound } from '../lib/sounds';
 import CustomizationModal from '../components/CustomizationModal';
+import LocationPicker from '../components/LocationPicker';
 
 const SESSION_KEYWORDS = ['session expired', 'sign in again', 'please sign in'];
 const TAKEAWAY_CHARGE = 10;
+const DELIVERY_CHECKOUT_ENABLED = false;
 const AI_SUGGESTION_DEBOUNCE_MS = 350;
 const WATER_ITEM_KEYWORDS = ['water bottle', 'water bottles', 'mineral water', 'bottled water', 'bisleri', 'aquafina', 'kinley'];
 const WATER_CATEGORY_KEYWORDS = ['water bottle', 'water bottles', 'mineral water', 'bottled water'];
@@ -124,6 +126,7 @@ type RefreshmentSuggestion = {
   menuItem: OfferMenuCatalogItem;
   reason: string | null;
 };
+type CheckoutOrderType = OrderType;
 type CheckoutStep = 'customer' | 'payment';
 
 function getPromoRewardSummary(items: OfferRewardItem[]) {
@@ -181,7 +184,14 @@ export default function CartPage() {
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [orderType, setOrderType] = useState<CheckoutOrderType>('pickup');
   const [pickupOption, setPickupOption] = useState<PickupOption>('dine_in');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [deliveryPincode, setDeliveryPincode] = useState('');
+  const [deliveryZone, setDeliveryZone] = useState<DeliveryZone | null>(null);
+  const [deliveryLookupLoading, setDeliveryLookupLoading] = useState(false);
+  const [deliveryLookupError, setDeliveryLookupError] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('card');
   const [checkoutStep, setCheckoutStep] = useState<CheckoutStep | null>(null);
   const [activeOffers, setActiveOffers] = useState<Offer[]>([]);
@@ -211,15 +221,76 @@ export default function CartPage() {
   const pendingSuccessOrderId = readCheckoutSuccessOrder();
   const pendingOnlineOrderId = readPendingOnlineOrder();
   const activeCheckoutOrderId = pendingSuccessOrderId || pendingOnlineOrderId;
+  const activeOrderType: CheckoutOrderType = DELIVERY_CHECKOUT_ENABLED ? orderType : 'pickup';
+
+  useEffect(() => {
+    if (!DELIVERY_CHECKOUT_ENABLED && orderType === 'delivery') {
+      setOrderType('pickup');
+      setPickupOption('dine_in');
+    }
+  }, [orderType]);
 
   useEffect(() => {
     if (profile) {
       if (profile.full_name && !name) setName(profile.full_name);
       if (profile.email && !email) setEmail(profile.email);
+      if (profile.phone && !phone) setPhone(profile.phone.replace(/\D/g, '').slice(0, 10));
+      if (profile.default_address && !deliveryAddress) setDeliveryAddress(profile.default_address);
+      if (profile.default_pincode && !deliveryPincode) setDeliveryPincode(profile.default_pincode.replace(/\D/g, '').slice(0, 6));
     } else if (user?.email && !email) {
       setEmail(user.email);
     }
-  }, [profile, user, name, email]);
+  }, [profile, user, name, email, phone, deliveryAddress, deliveryPincode]);
+
+  useEffect(() => {
+    const normalizedPincode = deliveryPincode.replace(/\D/g, '').slice(0, 6);
+
+    if (normalizedPincode.length !== 6) {
+      setDeliveryZone(null);
+      setDeliveryLookupLoading(false);
+      setDeliveryLookupError('');
+      return;
+    }
+
+    let isMounted = true;
+    setDeliveryLookupLoading(true);
+    setDeliveryLookupError('');
+
+    void (async () => {
+      const { data, error } = await customerSupabase
+        .from('delivery_zones')
+        .select('*')
+        .eq('pincode', normalizedPincode)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (!isMounted) {
+        return;
+      }
+
+      if (error) {
+        console.error('Failed to check delivery availability', error);
+        setDeliveryZone(null);
+        setDeliveryLookupError(error.message || 'Could not verify delivery availability');
+        setDeliveryLookupLoading(false);
+        return;
+      }
+
+      if (!data) {
+        setDeliveryZone(null);
+        setDeliveryLookupError('Delivery is not available for this pincode yet');
+        setDeliveryLookupLoading(false);
+        return;
+      }
+
+      setDeliveryZone(data as DeliveryZone);
+      setDeliveryLookupLoading(false);
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [deliveryPincode]);
 
   useEffect(() => {
     if (!user) {
@@ -398,12 +469,21 @@ export default function CartPage() {
   ];
   const featuredAutomaticOffer = selectedAutomaticOffer?.offer || applicableAutomaticOffers[0]?.offer || activeOffers.find((offer) => getOfferMode(offer) === 'automatic') || null;
   const discount = Math.min(subtotal, couponDiscount + automaticDiscount + reviewRewardDiscount);
-  function getTotalForPickupOption(option: PickupOption) {
-    const optionTakeawayFee = option === 'takeaway' ? TAKEAWAY_CHARGE : 0;
-    return Math.max(0, subtotal - discount) + optionTakeawayFee;
+  const deliveryFee = activeOrderType === 'delivery' ? Number(deliveryZone?.delivery_fee || 0) : 0;
+  const deliveryMinimumOrder = Number(deliveryZone?.min_order || 0);
+  const deliveryEstimatedTime = Number(deliveryZone?.estimated_time || 0);
+
+  function getTotalForCheckoutMode(checkoutOrderType: CheckoutOrderType, checkoutPickupOption: PickupOption) {
+    const itemTotal = Math.max(0, subtotal - discount);
+    if (checkoutOrderType === 'delivery') {
+      return itemTotal + deliveryFee;
+    }
+
+    const optionTakeawayFee = checkoutPickupOption === 'takeaway' ? TAKEAWAY_CHARGE : 0;
+    return itemTotal + optionTakeawayFee;
   }
-  const takeawayFee = pickupOption === 'takeaway' ? TAKEAWAY_CHARGE : 0;
-  const total = getTotalForPickupOption(pickupOption);
+  const takeawayFee = activeOrderType === 'pickup' && pickupOption === 'takeaway' ? TAKEAWAY_CHARGE : 0;
+  const total = getTotalForCheckoutMode(activeOrderType, pickupOption);
   const isFreeOrder = total <= 0;
   const automaticOfferApplied = automaticDiscount > 0 || automaticRewardItems.length > 0;
   const multipleAutomaticOffersAvailable = applicableAutomaticOffers.length > 1;
@@ -512,6 +592,9 @@ export default function CartPage() {
     const { error: profileUpdateError } = await customerSupabase.from('profiles').update({
       full_name: name.trim(),
       email: getCustomerEmail(),
+      phone: phone.trim() || profile?.phone || '',
+      default_address: deliveryAddress.trim() || profile?.default_address || '',
+      default_pincode: deliveryPincode.trim() || profile?.default_pincode || '',
     }).eq('id', user.id);
 
     if (profileUpdateError) {
@@ -535,16 +618,28 @@ export default function CartPage() {
     clearCart();
   }
 
-  async function startRazorpayCheckout(customerEmail: string, checkoutPickupOption: PickupOption, checkoutTotal: number) {
+  async function startRazorpayCheckout(
+    customerEmail: string,
+    checkoutOrderType: CheckoutOrderType,
+    checkoutPickupOption: PickupOption,
+    checkoutAddress: string,
+    checkoutPincode: string,
+    checkoutDeliveryFee: number,
+    checkoutTotal: number,
+  ) {
     const razorpayScriptPromise = loadRazorpayScript();
-    const checkoutServiceModeLabel = getServiceModeLabel({ order_type: 'pickup', pickup_option: checkoutPickupOption });
+    const checkoutServiceModeLabel = getServiceModeLabel({ order_type: checkoutOrderType, pickup_option: checkoutPickupOption });
     const customerName = name.trim();
-    const customerPhone = getCheckoutCustomerPhoneForApi();
+    const customerPhone = getCheckoutCustomerPhoneForApi(phone);
     const razorpayOrder = await createRazorpayOrder({
       customerName,
       customerPhone,
       customerEmail,
+      orderType: checkoutOrderType,
       pickupOption: checkoutPickupOption,
+      address: checkoutAddress,
+      pincode: checkoutPincode,
+      deliveryFee: checkoutDeliveryFee,
       subtotal,
       discount,
       total: checkoutTotal,
@@ -559,7 +654,11 @@ export default function CartPage() {
         orderId: razorpayOrder.appOrderId,
         customerName,
         customerEmail,
+        orderType: checkoutOrderType,
         pickupOption: checkoutPickupOption,
+        address: checkoutAddress,
+        pincode: checkoutPincode,
+        deliveryFee: checkoutDeliveryFee,
         subtotal,
         discount,
         total: checkoutTotal,
@@ -777,6 +876,51 @@ export default function CartPage() {
     return true;
   }
 
+  function validateDeliveryDetails() {
+    if (!DELIVERY_CHECKOUT_ENABLED || activeOrderType !== 'delivery') {
+      return true;
+    }
+
+    if (!user) {
+      showToast('Please sign in to use delivery', 'error');
+      setCheckoutStep(null);
+      navigate('/auth', { state: { from: '/cart' } });
+      return false;
+    }
+
+    if (phone.replace(/\D/g, '').length !== 10) {
+      showToast('Please enter a valid 10-digit mobile number', 'error');
+      return false;
+    }
+
+    if (!deliveryAddress.trim()) {
+      showToast('Please select or enter your delivery address', 'error');
+      return false;
+    }
+
+    if (deliveryPincode.trim().length !== 6) {
+      showToast('Please enter a valid 6-digit delivery pincode', 'error');
+      return false;
+    }
+
+    if (deliveryLookupLoading) {
+      showToast('Checking delivery availability for your pincode', 'error');
+      return false;
+    }
+
+    if (!deliveryZone) {
+      showToast(deliveryLookupError || 'Delivery is not available for this pincode yet', 'error');
+      return false;
+    }
+
+    if (subtotal < deliveryMinimumOrder) {
+      showToast(`Minimum order for ${deliveryZone.area_name} is ₹${deliveryMinimumOrder.toFixed(0)}`, 'error');
+      return false;
+    }
+
+    return true;
+  }
+
   function handleCheckoutStart() {
     if (submitting || !validateCheckoutAvailability()) {
       return;
@@ -799,8 +943,22 @@ export default function CartPage() {
     setPickupOption(option);
   }
 
+  function handleOrderTypeChoice(nextOrderType: CheckoutOrderType) {
+    if (submitting || !validateCheckoutAvailability()) {
+      return;
+    }
+
+    if (!DELIVERY_CHECKOUT_ENABLED && nextOrderType === 'delivery') {
+      setOrderType('pickup');
+      setPickupOption('dine_in');
+      return;
+    }
+
+    setOrderType(nextOrderType);
+  }
+
   function handleCustomerContinue() {
-    if (submitting || !validateCheckoutAvailability() || !validateCustomerDetails()) {
+    if (submitting || !validateCheckoutAvailability() || !validateDeliveryDetails() || !validateCustomerDetails()) {
       return;
     }
 
@@ -816,23 +974,30 @@ export default function CartPage() {
   }
 
   function handlePaymentContinue() {
-    if (submitting || !validateCheckoutAvailability() || !validateCustomerDetails()) {
+    if (submitting || !validateCheckoutAvailability() || !validateDeliveryDetails() || !validateCustomerDetails()) {
       return;
     }
 
     setCheckoutStep(null);
-    void submitCheckout(pickupOption, paymentMethod);
+    void submitCheckout(activeOrderType, pickupOption, paymentMethod);
   }
 
-  async function submitCheckout(checkoutPickupOption = pickupOption, checkoutPaymentMethod = paymentMethod) {
-    if (!validateCheckoutAvailability() || !validateCustomerDetails()) {
+  async function submitCheckout(
+    checkoutOrderType = activeOrderType,
+    checkoutPickupOption = pickupOption,
+    checkoutPaymentMethod = paymentMethod,
+  ) {
+    if (!validateCheckoutAvailability() || !validateDeliveryDetails() || !validateCustomerDetails()) {
       return;
     }
 
     setSubmitting(true);
 
     try {
-      const checkoutTotal = getTotalForPickupOption(checkoutPickupOption);
+      const checkoutAddress = checkoutOrderType === 'delivery' ? deliveryAddress.trim() : '';
+      const checkoutPincode = checkoutOrderType === 'delivery' ? deliveryPincode.trim() : '';
+      const checkoutDeliveryFee = checkoutOrderType === 'delivery' ? Number(deliveryZone?.delivery_fee || 0) : 0;
+      const checkoutTotal = getTotalForCheckoutMode(checkoutOrderType, checkoutPickupOption);
       const checkoutIsFreeOrder = checkoutTotal <= 0;
       const customerEmail = getCustomerEmail();
       void syncProfileDetails().catch((error) => {
@@ -840,15 +1005,27 @@ export default function CartPage() {
       });
 
       if (checkoutPaymentMethod === 'card' && !checkoutIsFreeOrder) {
-        await startRazorpayCheckout(customerEmail, checkoutPickupOption, checkoutTotal);
+        await startRazorpayCheckout(
+          customerEmail,
+          checkoutOrderType,
+          checkoutPickupOption,
+          checkoutAddress,
+          checkoutPincode,
+          checkoutDeliveryFee,
+          checkoutTotal,
+        );
         return;
       }
 
       const order = await createCounterOrder({
         customerName: name.trim(),
-        customerPhone: getCheckoutCustomerPhoneForApi(),
+        customerPhone: getCheckoutCustomerPhoneForApi(phone),
         customerEmail,
+        orderType: checkoutOrderType,
         pickupOption: checkoutPickupOption,
+        address: checkoutAddress,
+        pincode: checkoutPincode,
+        deliveryFee: checkoutDeliveryFee,
         subtotal,
         discount,
         total: checkoutTotal,
@@ -863,7 +1040,11 @@ export default function CartPage() {
           orderId: order.appOrderId,
           customerName: name.trim(),
           customerEmail,
+          orderType: checkoutOrderType,
           pickupOption: checkoutPickupOption,
+          address: checkoutAddress,
+          pincode: checkoutPincode,
+          deliveryFee: checkoutDeliveryFee,
           subtotal,
           discount,
           total: checkoutTotal,
@@ -1498,6 +1679,12 @@ export default function CartPage() {
                 <span className="tabular-nums">-{'\u20B9'}{discount.toFixed(0)}</span>
               </div>
             )}
+            {deliveryFee > 0 && (
+              <div className="flex justify-between text-brand-text-muted">
+                <span className="text-[13px]">Delivery fee</span>
+                <span className="tabular-nums">{'\u20B9'}{deliveryFee.toFixed(0)}</span>
+              </div>
+            )}
             {takeawayFee > 0 && (
               <div className="flex justify-between text-brand-text-muted">
                 <span className="text-[13px]">Takeaway charge</span>
@@ -1538,7 +1725,25 @@ export default function CartPage() {
             isSignedIn={!!user}
             name={name}
             email={email}
+            phone={phone}
+            orderType={activeOrderType}
             pickupOption={pickupOption}
+            address={deliveryAddress}
+            pincode={deliveryPincode}
+            deliveryZone={deliveryZone}
+            deliveryFee={deliveryFee}
+            deliveryMinimumOrder={deliveryMinimumOrder}
+            deliveryEstimatedTime={deliveryEstimatedTime}
+            deliveryLookupLoading={deliveryLookupLoading}
+            deliveryLookupError={deliveryLookupError}
+            subtotal={subtotal}
+            couponDiscount={couponDiscount}
+            automaticDiscount={automaticDiscount}
+            reviewRewardDiscount={reviewRewardDiscount}
+            discount={discount}
+            addOnTotal={addOnTotal}
+            rewardItemCount={promoRewardItems.reduce((sum, item) => sum + item.quantity, 0)}
+            takeawayFee={takeawayFee}
             paymentMethod={paymentMethod}
             total={total}
             isFreeOrder={isFreeOrder}
@@ -1547,7 +1752,11 @@ export default function CartPage() {
             onBack={() => setCheckoutStep('customer')}
             onNameChange={setName}
             onEmailChange={setEmail}
+            onPhoneChange={setPhone}
+            onSelectOrderType={handleOrderTypeChoice}
             onSelectPickupOption={handlePickupChoice}
+            onAddressChange={setDeliveryAddress}
+            onPincodeChange={setDeliveryPincode}
             onContinueCustomer={handleCustomerContinue}
             onSelectPaymentMethod={handlePaymentChoice}
             onContinuePayment={handlePaymentContinue}
@@ -1586,7 +1795,25 @@ function CheckoutFlowModal({
   isSignedIn,
   name,
   email,
+  phone,
+  orderType,
   pickupOption,
+  address,
+  pincode,
+  deliveryZone,
+  deliveryFee,
+  deliveryMinimumOrder,
+  deliveryEstimatedTime,
+  deliveryLookupLoading,
+  deliveryLookupError,
+  subtotal,
+  couponDiscount,
+  automaticDiscount,
+  reviewRewardDiscount,
+  discount,
+  addOnTotal,
+  rewardItemCount,
+  takeawayFee,
   paymentMethod,
   total,
   isFreeOrder,
@@ -1595,7 +1822,11 @@ function CheckoutFlowModal({
   onBack,
   onNameChange,
   onEmailChange,
+  onPhoneChange,
+  onSelectOrderType,
   onSelectPickupOption,
+  onAddressChange,
+  onPincodeChange,
   onContinueCustomer,
   onSelectPaymentMethod,
   onContinuePayment,
@@ -1604,7 +1835,25 @@ function CheckoutFlowModal({
   isSignedIn: boolean;
   name: string;
   email: string;
+  phone: string;
+  orderType: CheckoutOrderType;
   pickupOption: PickupOption;
+  address: string;
+  pincode: string;
+  deliveryZone: DeliveryZone | null;
+  deliveryFee: number;
+  deliveryMinimumOrder: number;
+  deliveryEstimatedTime: number;
+  deliveryLookupLoading: boolean;
+  deliveryLookupError: string;
+  subtotal: number;
+  couponDiscount: number;
+  automaticDiscount: number;
+  reviewRewardDiscount: number;
+  discount: number;
+  addOnTotal: number;
+  rewardItemCount: number;
+  takeawayFee: number;
   paymentMethod: PaymentMethod;
   total: number;
   isFreeOrder: boolean;
@@ -1613,18 +1862,31 @@ function CheckoutFlowModal({
   onBack: () => void;
   onNameChange: (value: string) => void;
   onEmailChange: (value: string) => void;
+  onPhoneChange: (value: string) => void;
+  onSelectOrderType: (value: CheckoutOrderType) => void;
   onSelectPickupOption: (option: PickupOption) => void;
+  onAddressChange: (value: string) => void;
+  onPincodeChange: (value: string) => void;
   onContinueCustomer: () => void;
   onSelectPaymentMethod: (method: PaymentMethod) => void;
   onContinuePayment: () => void;
 }) {
-  const orderTypeSummary = pickupOption === 'takeaway'
-    ? `Takeaway selected. Includes ₹${TAKEAWAY_CHARGE} takeaway charge.`
-    : 'Dine In selected. No takeaway charge.';
+  const isDelivery = orderType === 'delivery';
+  const orderTypeSummary = isDelivery
+    ? deliveryZone
+      ? `Delivery to ${deliveryZone.area_name}. Fee ₹${deliveryFee.toFixed(0)}${deliveryEstimatedTime > 0 ? `, ETA ~${deliveryEstimatedTime} min` : ''}.`
+      : deliveryLookupLoading
+        ? 'Checking delivery availability for your pincode.'
+        : deliveryLookupError || 'Share your live location or search your address to check delivery.'
+    : pickupOption === 'takeaway'
+      ? `Takeaway selected. Includes ₹${TAKEAWAY_CHARGE} takeaway charge.`
+      : 'Dine In selected. No takeaway charge.';
   const stepLabel = step === 'customer' ? '1 of 2' : '2 of 2';
   const heading = step === 'customer'
     ? (isSignedIn ? 'Confirm details' : 'Guest or sign in')
     : (isFreeOrder ? 'Place order' : 'Choose payment');
+  const cashLabel = isDelivery ? 'Cash on Delivery' : 'Pay at Counter';
+  const cashDescription = isDelivery ? 'Pay when your order arrives' : 'Pay when you collect';
 
   return (
     <motion.div
@@ -1664,39 +1926,114 @@ function CheckoutFlowModal({
           <div className="space-y-4">
             <div className="rounded-xl border border-brand-border bg-brand-surface px-4 py-3">
               <div className="flex items-center justify-between gap-3 text-[13px]">
-                <span className="font-semibold text-brand-text-muted">Order total</span>
-                <span className="font-black text-brand-gold tabular-nums">₹{total.toFixed(0)}</span>
+                <span className="font-semibold text-brand-text-muted">Service mode</span>
+                <span className="font-black text-brand-gold">{isDelivery ? 'Delivery' : pickupOption === 'takeaway' ? 'Takeaway' : 'Dine In'}</span>
               </div>
               <p className="mt-1 text-[11px] font-medium text-brand-text-dim">{orderTypeSummary}</p>
-              <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <button
-                  onClick={() => onSelectPickupOption('dine_in')}
+                  onClick={() => {
+                    onSelectOrderType('pickup');
+                    onSelectPickupOption('dine_in');
+                  }}
                   disabled={submitting}
                   className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-[12px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                    pickupOption === 'dine_in'
+                    !isDelivery && pickupOption === 'dine_in'
                       ? 'border-brand-gold bg-brand-gold/10 text-white'
                       : 'border-brand-border text-brand-text-muted hover:border-brand-gold/40 hover:text-white'
                   }`}
                 >
-                  <Store size={15} className={pickupOption === 'dine_in' ? 'text-brand-gold' : 'text-brand-text-dim'} />
+                  <Store size={15} className={!isDelivery && pickupOption === 'dine_in' ? 'text-brand-gold' : 'text-brand-text-dim'} />
                   Dine In
                 </button>
                 <button
-                  onClick={() => onSelectPickupOption('takeaway')}
+                  onClick={() => {
+                    onSelectOrderType('pickup');
+                    onSelectPickupOption('takeaway');
+                  }}
                   disabled={submitting}
                   className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-[12px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                    pickupOption === 'takeaway'
+                    !isDelivery && pickupOption === 'takeaway'
                       ? 'border-brand-gold bg-brand-gold/10 text-white'
                       : 'border-brand-border text-brand-text-muted hover:border-brand-gold/40 hover:text-white'
                   }`}
                 >
-                  <ShoppingBag size={15} className={pickupOption === 'takeaway' ? 'text-brand-gold' : 'text-brand-text-dim'} />
+                  <ShoppingBag size={15} className={!isDelivery && pickupOption === 'takeaway' ? 'text-brand-gold' : 'text-brand-text-dim'} />
                   Takeaway
                 </button>
               </div>
             </div>
 
-            {!isSignedIn ? (
+            {isDelivery && (
+              <div className="rounded-xl border border-brand-border bg-brand-surface p-4">
+                <div className="mb-3">
+                  <p className="text-[13px] font-bold text-white">Delivery address</p>
+                  <p className="mt-1 text-[12px] text-brand-text-dim">
+                    Use your current location or search for your area, then confirm the exact address.
+                  </p>
+                </div>
+
+                <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="relative">
+                    <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-text-dim" />
+                    <input
+                      type="text"
+                      placeholder="Recipient name *"
+                      value={name}
+                      onChange={(event) => onNameChange(event.target.value)}
+                      className="input-field pl-9 text-[14px]"
+                      autoComplete="name"
+                    />
+                  </div>
+                  <div className="relative">
+                    <Phone size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-text-dim" />
+                    <input
+                      type="tel"
+                      inputMode="numeric"
+                      placeholder="Contact mobile *"
+                      value={phone}
+                      onChange={(event) => onPhoneChange(event.target.value.replace(/\D/g, '').slice(0, 10))}
+                      className="input-field pl-9 text-[14px]"
+                      autoComplete="tel"
+                    />
+                  </div>
+                </div>
+
+                <LocationPicker
+                  address={address}
+                  pincode={pincode}
+                  onAddressChange={onAddressChange}
+                  onPincodeChange={onPincodeChange}
+                />
+
+                {deliveryLookupLoading && (
+                  <div className="mt-3 rounded-xl border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-[12px] font-semibold text-sky-400">
+                    Checking delivery availability for this pincode.
+                  </div>
+                )}
+
+                {!deliveryLookupLoading && deliveryZone && (
+                  <div className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3">
+                    <p className="text-[13px] font-bold text-emerald-400">{deliveryZone.area_name}</p>
+                    <p className="mt-1 text-[12px] text-emerald-300">
+                      Delivery fee ₹{deliveryFee.toFixed(0)}
+                      {deliveryEstimatedTime > 0 ? ` • ETA ~${deliveryEstimatedTime} min` : ''}
+                    </p>
+                    <p className="mt-1 text-[12px] text-emerald-300">
+                      Minimum order ₹{deliveryMinimumOrder.toFixed(0)}
+                    </p>
+                  </div>
+                )}
+
+                {!deliveryLookupLoading && !deliveryZone && deliveryLookupError && pincode.trim().length === 6 && (
+                  <div className="mt-3 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-[12px] font-semibold text-red-300">
+                    {deliveryLookupError}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!isSignedIn && !isDelivery ? (
               <div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div className="rounded-lg border-2 border-brand-gold bg-brand-gold/10 p-3 text-left">
@@ -1717,7 +2054,7 @@ function CheckoutFlowModal({
                   </Link>
                 </div>
               </div>
-            ) : (
+            ) : isSignedIn ? (
               <div className="flex items-center gap-3 rounded-lg border border-brand-gold/20 bg-brand-gold/5 p-3">
                 <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-brand-gold/10">
                   <User size={18} className="text-brand-gold" />
@@ -1727,36 +2064,53 @@ function CheckoutFlowModal({
                   <p className="text-[12px] text-brand-text-dim">Your receipt will go to the email below.</p>
                 </div>
               </div>
+            ) : null}
+
+            {!isDelivery && (
+              <>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="relative">
+                    <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-text-dim" />
+                    <input
+                      type="text"
+                      placeholder="Your name *"
+                      value={name}
+                      onChange={(event) => onNameChange(event.target.value)}
+                      className="input-field pl-9 text-[14px]"
+                      autoComplete="name"
+                      autoFocus={!name}
+                    />
+                  </div>
+                  <div className="relative">
+                    <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-text-dim" />
+                    <input
+                      type="email"
+                      placeholder="Email for receipt *"
+                      value={email}
+                      onChange={(event) => onEmailChange(event.target.value)}
+                      className="input-field pl-9 text-[14px]"
+                      autoComplete="email"
+                    />
+                  </div>
+                </div>
+                <p className="text-[12px] font-medium text-brand-text-dim">
+                  We will send your order receipt to this email.
+                </p>
+              </>
             )}
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="relative">
-                <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-text-dim" />
-                <input
-                  type="text"
-                  placeholder="Your name *"
-                  value={name}
-                  onChange={(event) => onNameChange(event.target.value)}
-                  className="input-field pl-9 text-[14px]"
-                  autoComplete="name"
-                  autoFocus={!name}
-                />
-              </div>
-              <div className="relative">
-                <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-text-dim" />
-                <input
-                  type="email"
-                  placeholder="Email for receipt *"
-                  value={email}
-                  onChange={(event) => onEmailChange(event.target.value)}
-                  className="input-field pl-9 text-[14px]"
-                  autoComplete="email"
-                />
-              </div>
-            </div>
-            <p className="text-[12px] font-medium text-brand-text-dim">
-              We will send your order receipt to this email.
-            </p>
+            <CheckoutBillSummary
+              subtotal={subtotal}
+              couponDiscount={couponDiscount}
+              automaticDiscount={automaticDiscount}
+              reviewRewardDiscount={reviewRewardDiscount}
+              discount={discount}
+              addOnTotal={addOnTotal}
+              rewardItemCount={rewardItemCount}
+              deliveryFee={deliveryFee}
+              takeawayFee={takeawayFee}
+              total={total}
+            />
 
             <button
               onClick={onContinueCustomer}
@@ -1777,11 +2131,24 @@ function CheckoutFlowModal({
             </button>
             <div className="rounded-xl border border-brand-border bg-brand-surface px-4 py-3">
               <div className="flex items-center justify-between gap-3 text-[13px]">
-                <span className="font-semibold text-brand-text-muted">Order total</span>
-                <span className="font-black text-brand-gold tabular-nums">₹{total.toFixed(0)}</span>
+                <span className="font-semibold text-brand-text-muted">Service mode</span>
+                <span className="font-black text-brand-gold">{isDelivery ? 'Delivery' : pickupOption === 'takeaway' ? 'Takeaway' : 'Dine In'}</span>
               </div>
               <p className="mt-1 text-[11px] font-medium text-brand-text-dim">{orderTypeSummary}</p>
             </div>
+
+            <CheckoutBillSummary
+              subtotal={subtotal}
+              couponDiscount={couponDiscount}
+              automaticDiscount={automaticDiscount}
+              reviewRewardDiscount={reviewRewardDiscount}
+              discount={discount}
+              addOnTotal={addOnTotal}
+              rewardItemCount={rewardItemCount}
+              deliveryFee={deliveryFee}
+              takeawayFee={takeawayFee}
+              total={total}
+            />
 
             {isFreeOrder ? (
               <button
@@ -1827,10 +2194,10 @@ function CheckoutFlowModal({
                     <Wallet size={20} className={paymentMethod === 'cod' ? 'text-brand-gold' : 'text-brand-text-dim'} />
                   </div>
                   <span className={`block text-[14px] font-bold ${paymentMethod === 'cod' ? 'text-white' : 'text-brand-text-muted'}`}>
-                    Pay at Counter
+                    {cashLabel}
                   </span>
                   <span className="text-[11px] text-brand-text-dim">
-                    Pay when you collect
+                    {cashDescription}
                   </span>
                 </button>
               </div>
@@ -1841,13 +2208,108 @@ function CheckoutFlowModal({
                 disabled={submitting}
                 className="btn-primary w-full rounded-xl py-3 text-[14px] font-black disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {paymentMethod === 'card' ? 'Proceed to Online Payment' : 'Place Order and Pay at Counter'}
+                {paymentMethod === 'card'
+                  ? 'Proceed to Online Payment'
+                  : isDelivery
+                    ? 'Place Delivery Order'
+                    : 'Place Order and Pay at Counter'}
               </button>
             )}
           </div>
         )}
       </motion.div>
     </motion.div>
+  );
+}
+
+function CheckoutBillSummary({
+  subtotal,
+  couponDiscount,
+  automaticDiscount,
+  reviewRewardDiscount,
+  discount,
+  addOnTotal,
+  rewardItemCount,
+  deliveryFee,
+  takeawayFee,
+  total,
+}: {
+  subtotal: number;
+  couponDiscount: number;
+  automaticDiscount: number;
+  reviewRewardDiscount: number;
+  discount: number;
+  addOnTotal: number;
+  rewardItemCount: number;
+  deliveryFee: number;
+  takeawayFee: number;
+  total: number;
+}) {
+  return (
+    <div className="rounded-xl border border-brand-border bg-brand-surface px-4 py-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-[13px] font-black text-white">Bill details</span>
+        {discount > 0 && (
+          <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] font-black text-emerald-400">
+            Saved ₹{discount.toFixed(0)}
+          </span>
+        )}
+      </div>
+      <div className="space-y-2 text-[13px]">
+        <div className="flex justify-between gap-3 text-brand-text-muted">
+          <span>Item total</span>
+          <span className="tabular-nums">₹{subtotal.toFixed(0)}</span>
+        </div>
+        {couponDiscount > 0 && (
+          <div className="flex justify-between gap-3 text-emerald-400">
+            <span>Coupon discount</span>
+            <span className="tabular-nums">-₹{couponDiscount.toFixed(0)}</span>
+          </div>
+        )}
+        {automaticDiscount > 0 && (
+          <div className="flex justify-between gap-3 text-emerald-400">
+            <span>Offer discount</span>
+            <span className="tabular-nums">-₹{automaticDiscount.toFixed(0)}</span>
+          </div>
+        )}
+        {reviewRewardDiscount > 0 && (
+          <div className="flex justify-between gap-3 text-emerald-400">
+            <span>Review reward</span>
+            <span className="tabular-nums">-₹{reviewRewardDiscount.toFixed(0)}</span>
+          </div>
+        )}
+        {rewardItemCount > 0 && (
+          <div className="flex justify-between gap-3 text-emerald-300">
+            <span>Free items</span>
+            <span className="tabular-nums">{rewardItemCount}</span>
+          </div>
+        )}
+        {addOnTotal > 0 && (
+          <div className="flex justify-between gap-3 text-brand-text-muted">
+            <span>Add-ons</span>
+            <span className="tabular-nums">₹{addOnTotal.toFixed(0)}</span>
+          </div>
+        )}
+        {deliveryFee > 0 && (
+          <div className="flex justify-between gap-3 text-brand-text-muted">
+            <span>Delivery fee</span>
+            <span className="tabular-nums">₹{deliveryFee.toFixed(0)}</span>
+          </div>
+        )}
+        {takeawayFee > 0 && (
+          <div className="flex justify-between gap-3 text-brand-text-muted">
+            <span>Takeaway charge</span>
+            <span className="tabular-nums">₹{takeawayFee.toFixed(0)}</span>
+          </div>
+        )}
+        <div className="border-t border-brand-border pt-2.5">
+          <div className="flex justify-between gap-3">
+            <span className="font-black text-white">To pay</span>
+            <span className="tabular-nums text-lg font-black text-brand-gold">₹{total.toFixed(0)}</span>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

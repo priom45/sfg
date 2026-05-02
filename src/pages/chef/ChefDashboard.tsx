@@ -24,7 +24,7 @@ interface OrderItemRow {
   customizations: { group_name: string; option_name: string; price: number }[] | null;
 }
 
-type Tab = 'payments' | 'queue' | 'preparing' | 'done';
+type Tab = 'payments' | 'queue' | 'preparing' | 'pendingPayment' | 'done';
 type PaymentCategory = 'all' | 'before' | 'after';
 type PaymentDraft = {
   method: CounterPaymentMethod;
@@ -79,7 +79,8 @@ export default function ChefDashboard() {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const { signOut } = useAuth();
-  const prevPendingCountRef = useRef(0);
+  const prevQueueCountRef = useRef(0);
+  const prevPaymentCountRef = useRef(0);
   const initialLoadRef = useRef(true);
   const flashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -113,19 +114,23 @@ export default function ChefDashboard() {
     const data = [...(activeOrdersResult.data || []), ...(deliveredOrdersResult.data || [])];
 
     if (data && data.length > 0) {
-      const pendingCount = data.filter((o) => o.status === 'pending' && !isAwaitingOnlinePayment(o) && !isAwaitingCounterPayment(o)).length;
+      const queueCount = data.filter((o) => o.status === 'pending' && !isAwaitingOnlinePayment(o) && !isAwaitingCounterPayment(o)).length;
+      const paymentWaitingCount = data.filter((o) => isAwaitingCounterPayment(o) && !['cancelled', 'expired', 'delivered'].includes(o.status)).length;
+      const hasNewQueueOrder = queueCount > prevQueueCountRef.current;
+      const hasNewPaymentOrder = paymentWaitingCount > prevPaymentCountRef.current;
 
-      if (!initialLoadRef.current && soundEnabled && pendingCount > prevPendingCountRef.current) {
+      if (!initialLoadRef.current && soundEnabled && (hasNewQueueOrder || hasNewPaymentOrder)) {
         playNewOrderAlert();
         setNewOrderFlash(true);
-        setTab('queue');
+        setTab(hasNewQueueOrder ? 'queue' : 'payments');
         if (flashTimeoutRef.current) {
           clearTimeout(flashTimeoutRef.current);
         }
         flashTimeoutRef.current = setTimeout(() => setNewOrderFlash(false), 2000);
       }
 
-      prevPendingCountRef.current = pendingCount;
+      prevQueueCountRef.current = queueCount;
+      prevPaymentCountRef.current = paymentWaitingCount;
       initialLoadRef.current = false;
       setOrders(data);
 
@@ -148,7 +153,8 @@ export default function ChefDashboard() {
       setOrderItemsMap(map);
     } else {
       initialLoadRef.current = false;
-      prevPendingCountRef.current = 0;
+      prevQueueCountRef.current = 0;
+      prevPaymentCountRef.current = 0;
       setOrders(data || []);
       setOrderItemsMap({});
     }
@@ -306,13 +312,13 @@ export default function ChefDashboard() {
     }
   }
 
-  async function markPickedUp(orderId: string) {
-    if (handoffOrderId === orderId) return;
-    setHandoffOrderId(orderId);
+  async function markPickedUp(order: Order) {
+    if (handoffOrderId === order.id) return;
+    setHandoffOrderId(order.id);
 
     const { error } = await supabase.from('orders').update({
       status: 'delivered',
-    }).eq('id', orderId);
+    }).eq('id', order.id);
 
     if (error) {
       console.error('Failed to mark order as picked up', error);
@@ -322,6 +328,13 @@ export default function ChefDashboard() {
     }
 
     try {
+      const awaitingPaymentAfterHandoff = isAwaitingCounterPayment(order);
+      setOrders((current) => current.map((currentOrder) => (
+        currentOrder.id === order.id
+          ? { ...currentOrder, status: 'delivered' }
+          : currentOrder
+      )));
+      setTab(awaitingPaymentAfterHandoff ? 'pendingPayment' : 'done');
       showToast('Pickup marked successfully');
       await loadOrders();
     } finally {
@@ -361,6 +374,9 @@ export default function ChefDashboard() {
           ? getOptimisticPaidOrder(currentOrder, counterPaymentMethod, cashReceivedAmount, onlineReceivedAmount)
           : currentOrder
       )));
+      if (order.status === 'delivered') {
+        setTab('done');
+      }
       setPayingOrderId(null);
       void loadOrders();
 
@@ -512,16 +528,19 @@ export default function ChefDashboard() {
     }
   }
 
-  const paymentOrders = orders.filter((o) => isAwaitingCounterPayment(o) && !['cancelled', 'expired'].includes(o.status));
-  const collectFirstPaymentOrders = paymentOrders.filter((o) => o.status === 'pending');
-  const afterDiningPaymentOrders = paymentOrders.filter((o) => o.status !== 'pending');
+  const activePaymentOrders = orders.filter((o) => isAwaitingCounterPayment(o) && !['cancelled', 'expired', 'delivered'].includes(o.status));
+  const collectFirstPaymentOrders = activePaymentOrders.filter((o) => o.status === 'pending');
+  const afterDiningPaymentOrders = activePaymentOrders.filter((o) => o.status !== 'pending');
+  const pendingPaymentOrders = orders
+    .filter((o) => isAwaitingCounterPayment(o) && o.status === 'delivered')
+    .sort((a, b) => getDoneOrderTime(b) - getDoneOrderTime(a));
   const filteredPaymentOrders = paymentCategory === 'before'
     ? collectFirstPaymentOrders
     : paymentCategory === 'after'
       ? afterDiningPaymentOrders
-      : paymentOrders;
+      : activePaymentOrders;
   const paymentCategoryOptions: { key: PaymentCategory; label: string; count: number }[] = [
-    { key: 'all', label: 'All', count: paymentOrders.length },
+    { key: 'all', label: 'All', count: activePaymentOrders.length },
     { key: 'before', label: 'Collect First', count: collectFirstPaymentOrders.length },
     { key: 'after', label: 'After Dining', count: afterDiningPaymentOrders.length },
   ];
@@ -535,12 +554,14 @@ export default function ChefDashboard() {
       return new Date(o.placed_at) >= today;
     })
     .sort((a, b) => getDoneOrderTime(b) - getDoneOrderTime(a));
+  const settledDoneOrders = todayDone.filter((o) => !(o.status === 'delivered' && isAwaitingCounterPayment(o)));
 
   const tabs: { key: Tab; label: string; count: number; icon: typeof Clock }[] = [
-    { key: 'payments', label: 'Payments', count: paymentOrders.length, icon: Wallet },
+    { key: 'payments', label: 'Payments', count: activePaymentOrders.length, icon: Wallet },
     { key: 'queue', label: 'Queue', count: queueOrders.length, icon: Users },
     { key: 'preparing', label: 'Preparing', count: preparingOrders.length, icon: Flame },
-    { key: 'done', label: 'Done', count: todayDone.length, icon: Check },
+    { key: 'pendingPayment', label: 'Pending Pay', count: pendingPaymentOrders.length, icon: Wallet },
+    { key: 'done', label: 'Done', count: settledDoneOrders.length, icon: Check },
   ];
 
   const displayOrders = tab === 'payments'
@@ -549,9 +570,11 @@ export default function ChefDashboard() {
       ? queueOrders
       : tab === 'preparing'
         ? preparingOrders
-        : todayDone;
+        : tab === 'pendingPayment'
+          ? pendingPaymentOrders
+          : settledDoneOrders;
   const extraItemCategories = getExtraItemCategories(menuCategories, menuItems);
-  const paymentEmptyTitle = paymentOrders.length === 0
+  const paymentEmptyTitle = activePaymentOrders.length === 0
     ? 'No counter payments waiting'
     : paymentCategory === 'before'
       ? 'No collect-first payments'
@@ -611,20 +634,20 @@ export default function ChefDashboard() {
       <div className="sticky top-[57px] z-40 bg-brand-bg/95 backdrop-blur-sm border-b border-brand-border">
         <div className="max-w-2xl mx-auto px-4 py-2">
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-2">
-            <StatCard label="Pay" value={paymentOrders.length} color="rose" />
+            <StatCard label="Pay" value={activePaymentOrders.length} color="rose" />
             <StatCard label="Queue" value={queueOrders.length} color="orange" />
             <StatCard label="Making" value={preparingOrders.length} color="amber" />
             <StatCard label="Ready" value={doneOrders.filter(o => o.status === 'packed').length} color="emerald" />
-            <StatCard label="Done" value={todayDone.filter(o => o.status === 'delivered').length} color="blue" />
+            <StatCard label="Done" value={settledDoneOrders.filter(o => o.status === 'delivered').length} color="blue" />
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
             {tabs.map((t) => (
               <button
                 key={t.key}
                 onClick={() => setTab(t.key)}
                 className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-bold transition-all ${
                   tab === t.key
-                    ? t.key === 'payments'
+                    ? t.key === 'payments' || t.key === 'pendingPayment'
                       ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/20'
                       : t.key === 'queue'
                       ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/20'
@@ -650,7 +673,7 @@ export default function ChefDashboard() {
       </div>
 
       <main className="max-w-2xl mx-auto px-4 py-4 pb-20 space-y-3">
-        {tab === 'payments' && paymentOrders.length > 0 && (
+        {tab === 'payments' && activePaymentOrders.length > 0 && (
           <div className="grid grid-cols-3 gap-2">
             {paymentCategoryOptions.map((category) => (
               <button
@@ -676,22 +699,28 @@ export default function ChefDashboard() {
         {displayOrders.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="w-16 h-16 bg-brand-surface rounded-2xl flex items-center justify-center mb-4">
-              {tab === 'payments' ? <Wallet size={28} className="text-brand-text-dim" /> :
+              {tab === 'payments' || tab === 'pendingPayment' ? <Wallet size={28} className="text-brand-text-dim" /> :
                tab === 'queue' ? <Users size={28} className="text-brand-text-dim" /> :
                tab === 'preparing' ? <Flame size={28} className="text-brand-text-dim" /> :
                <Check size={28} className="text-brand-text-dim" />}
             </div>
             <p className="text-brand-text-muted font-semibold">
               {tab === 'payments' ? paymentEmptyTitle :
+               tab === 'pendingPayment' ? 'No done orders waiting for payment' :
                tab === 'queue' ? 'No orders in queue' :
                tab === 'preparing' ? 'No orders being prepared' :
                'No completed orders today'}
             </p>
             {tab === 'payments' && (
               <p className="text-brand-text-dim text-[12px] mt-1">
-                {paymentOrders.length === 0
+                {activePaymentOrders.length === 0
                   ? 'Counter cash and UPI orders will appear here until marked paid'
                   : 'Switch payment category to view another group'}
+              </p>
+            )}
+            {tab === 'pendingPayment' && (
+              <p className="text-brand-text-dim text-[12px] mt-1">
+                Orders marked served or picked up with an amount due will stay here until payment is collected
               </p>
             )}
             {tab === 'queue' && (
@@ -1224,7 +1253,7 @@ export default function ChefDashboard() {
 
               {isReady && (
                 <button
-                  onClick={() => markPickedUp(order.id)}
+                  onClick={() => markPickedUp(order)}
                   disabled={handoffOrderId === order.id}
                   className="w-full mt-2 py-3.5 rounded-xl font-bold text-[14px] bg-brand-gold text-brand-bg hover:brightness-110 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
                 >
@@ -1239,14 +1268,14 @@ export default function ChefDashboard() {
         })}
       </main>
 
-      {paymentOrders.length > 0 && tab !== 'payments' && (
+      {activePaymentOrders.length > 0 && tab !== 'payments' && (
         <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 animate-slide-up">
           <button
             onClick={() => setTab('payments')}
             className="flex items-center gap-2 bg-rose-500 text-white px-5 py-3 rounded-full font-bold text-[14px] shadow-elevated shadow-rose-500/30 hover:bg-rose-600 transition-all active:scale-95"
           >
             <Wallet size={16} />
-            {paymentOrders.length} payment{paymentOrders.length !== 1 ? 's' : ''} waiting
+            {activePaymentOrders.length} payment{activePaymentOrders.length !== 1 ? 's' : ''} waiting
           </button>
         </div>
       )}
